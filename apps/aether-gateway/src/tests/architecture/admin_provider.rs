@@ -644,7 +644,8 @@ fn admin_provider_query_and_strategy_use_specific_local_owners() {
         "handlers/admin/provider/query/response.rs should own provider query response helpers"
     );
     let query_routes =
-        read_workspace_file("apps/aether-gateway/src/handlers/admin/provider/query/routes.rs");
+        read_workspace_file("apps/aether-gateway/src/handlers/admin/provider/query/routes.rs")
+            .replace("\r\n", "\n");
     assert!(
         query_routes.contains("state\n        .maybe_build_admin_provider_query_route_response(")
             || query_routes.contains("state.maybe_build_admin_provider_query_route_response("),
@@ -665,7 +666,8 @@ fn admin_provider_query_and_strategy_use_specific_local_owners() {
     );
 
     let strategy_routes =
-        read_workspace_file("apps/aether-gateway/src/handlers/admin/provider/strategy/routes.rs");
+        read_workspace_file("apps/aether-gateway/src/handlers/admin/provider/strategy/routes.rs")
+            .replace("\r\n", "\n");
     assert!(
         strategy_routes.contains("state\n        .maybe_build_admin_provider_strategy_route_response(")
             || strategy_routes.contains("state.maybe_build_admin_provider_strategy_route_response("),

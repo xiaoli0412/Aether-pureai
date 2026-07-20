@@ -30,7 +30,7 @@ pub(super) fn spec() -> ProviderOpsArchitectureSpec {
             { "fields": ["base_url"] },
             { "fields": ["session_cookie"] }
         ],
-        "x-quota-divisor": 500000,
+        "x-quota-divisor": null,
         "x-validation": [
             {
                 "type": "required",
@@ -63,13 +63,18 @@ pub(super) fn spec() -> ProviderOpsArchitectureSpec {
             config_schema: json!({
                 "type": "object",
                 "properties": {
+                    "quota_divisor": {
+                        "type": "number",
+                        "title": "额度除数",
+                        "description": "将原始额度值转换为美元的显式除数"
+                    },
                     "currency": {
                         "type": "string",
                         "title": "货币单位",
                         "default": "USD"
                     }
                 },
-                "required": []
+                "required": ["quota_divisor"]
             }),
         }],
         default_connector: Some("cookie"),
@@ -81,7 +86,6 @@ pub(super) fn default_action_config(action_type: &str) -> Option<Map<String, Val
         "query_balance" => Some(json_object(json!({
             "endpoint": "/api/user/self",
             "method": "GET",
-            "quota_divisor": 500000,
             "checkin_endpoint": "/api/user/sign_in",
             "currency": "USD"
         }))),

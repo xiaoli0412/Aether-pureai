@@ -148,6 +148,7 @@ fn copy_allowed_metadata_fields(source: &Map<String, Value>, target: &mut Map<St
     copy_non_null_value(source, target, "proxy");
     copy_non_null_value(source, target, "stage_timings_ms");
     copy_non_null_value(source, target, "db_timings_ms");
+    copy_aether_relay_metadata(source, target);
     sanitize_request_path_metadata_fields(target);
 }
 
@@ -193,6 +194,7 @@ fn move_allowed_metadata_fields(mut source: Map<String, Value>, target: &mut Map
     remove_non_null_value(&mut source, target, "proxy");
     remove_non_null_value(&mut source, target, "stage_timings_ms");
     remove_non_null_value(&mut source, target, "db_timings_ms");
+    move_aether_relay_metadata(&mut source, target);
     sanitize_request_path_metadata_fields(target);
 }
 
@@ -254,6 +256,50 @@ fn remove_non_empty_string(
         return;
     };
     target.insert(key.to_string(), Value::String(value));
+}
+
+fn copy_aether_relay_metadata(source: &Map<String, Value>, target: &mut Map<String, Value>) {
+    let Some(value) = source
+        .get("aether_relay")
+        .and_then(sanitize_aether_relay_metadata)
+    else {
+        return;
+    };
+    target.insert("aether_relay".to_string(), value);
+}
+
+fn move_aether_relay_metadata(source: &mut Map<String, Value>, target: &mut Map<String, Value>) {
+    let Some(raw_metadata) = source.remove("aether_relay") else {
+        return;
+    };
+    let Some(value) = sanitize_aether_relay_metadata(&raw_metadata) else {
+        return;
+    };
+    target.insert("aether_relay".to_string(), value);
+}
+
+fn sanitize_aether_relay_metadata(value: &Value) -> Option<Value> {
+    let source = value.as_object()?;
+    let mut metadata = Map::new();
+    for key in [
+        "instance_id",
+        "request_id",
+        "subject_id",
+        "token_subject_id",
+        "channel_id",
+        "group",
+        "model",
+        "relay_format",
+    ] {
+        copy_non_empty_string(source, &mut metadata, key);
+    }
+    if let Some(config_revision) = source.get("config_revision").and_then(Value::as_u64) {
+        metadata.insert(
+            "config_revision".to_string(),
+            Value::Number(config_revision.into()),
+        );
+    }
+    (!metadata.is_empty()).then_some(Value::Object(metadata))
 }
 
 fn copy_number(source: &Map<String, Value>, target: &mut Map<String, Value>, key: &str) {

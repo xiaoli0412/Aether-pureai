@@ -1,0 +1,9 @@
+CREATE TABLE new_api_integration_configs (
+    instance_id        VARCHAR(255) PRIMARY KEY,
+    route_profile      VARCHAR(255) NOT NULL,
+    execution_mode     VARCHAR(32) NOT NULL,
+    enabled            BOOLEAN NOT NULL,
+    capability_version VARCHAR(64) NOT NULL,
+    revision           BIGINT NOT NULL,
+    updated_at_unix_ms BIGINT NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

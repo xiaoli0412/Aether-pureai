@@ -122,7 +122,10 @@ where
     }
     mutate_headers(response.headers_mut())?;
     apply_streaming_response_headers(response.headers_mut());
-    insert_header_if_missing(response.headers_mut(), TRACE_ID_HEADER, trace_id)?;
+    response.headers_mut().insert(
+        HeaderName::from_static(TRACE_ID_HEADER),
+        HeaderValue::from_str(trace_id).map_err(|err| GatewayError::Internal(err.to_string()))?,
+    );
     insert_header_if_missing(response.headers_mut(), GATEWAY_HEADER, "rust-phase3b")?;
     if let Some(decision) = control_decision {
         insert_header_if_missing(
@@ -357,7 +360,9 @@ pub(crate) fn build_local_overloaded_response(
 #[cfg(test)]
 mod tests {
     use super::build_client_response_from_parts;
+    use crate::constants::{CONTROL_REQUEST_ID_HEADER, TRACE_ID_HEADER};
     use axum::body::Body;
+    use axum::http::StatusCode;
     use std::collections::BTreeMap;
 
     #[test]
@@ -385,5 +390,45 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("no")
         );
+    }
+
+    #[test]
+    fn gateway_trace_is_authoritative_without_replacing_upstream_request_id() {
+        for status in [StatusCode::OK, StatusCode::BAD_GATEWAY] {
+            let response = build_client_response_from_parts(
+                status.as_u16(),
+                &BTreeMap::from([
+                    (
+                        TRACE_ID_HEADER.to_string(),
+                        "forged-upstream-trace".to_string(),
+                    ),
+                    (
+                        CONTROL_REQUEST_ID_HEADER.to_string(),
+                        "upstream-request-123".to_string(),
+                    ),
+                ]),
+                Body::empty(),
+                "gateway-trace-123",
+                None,
+            )
+            .expect("response should build");
+
+            assert_eq!(
+                response
+                    .headers()
+                    .get(TRACE_ID_HEADER)
+                    .and_then(|value| value.to_str().ok()),
+                Some("gateway-trace-123"),
+                "gateway trace must be authoritative for {status}"
+            );
+            assert_eq!(
+                response
+                    .headers()
+                    .get(CONTROL_REQUEST_ID_HEADER)
+                    .and_then(|value| value.to_str().ok()),
+                Some("upstream-request-123"),
+                "dedicated upstream request ID must be preserved for {status}"
+            );
+        }
     }
 }

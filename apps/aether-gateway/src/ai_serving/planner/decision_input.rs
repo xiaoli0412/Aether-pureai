@@ -223,7 +223,10 @@ pub(crate) async fn attach_routing_policy_to_local_requested_model_input(
     body_json: &Value,
     client_api_format: &str,
 ) -> Result<(), GatewayError> {
-    let explicit_group = routing_header_value_str(&parts.headers, ROUTING_GROUP_HEADER);
+    ensure_trusted_relay_model_binding(parts, input.requested_model.as_str())?;
+    let trusted_relay_profile = trusted_relay_routing_profile(parts)?;
+    let uses_trusted_relay_profile = trusted_relay_profile.is_some();
+    let explicit_group = trusted_relay_profile.or_else(|| explicit_routing_group(parts));
     let selected_group = match state.routing_group_read_repository() {
         Some(repository) => {
             let user_groups_lookup_started_at = std::time::Instant::now();
@@ -254,7 +257,7 @@ pub(crate) async fn attach_routing_policy_to_local_requested_model_input(
             let user_id = input.auth_context.user_id.clone();
             let api_key_id = input.auth_context.api_key_id.clone();
             let group_selection_started_at = std::time::Instant::now();
-            let selection = state
+            let mut selection = state
                 .routing_group_selection_cache
                 .get_or_load_once(
                     selection_cache_key,
@@ -281,6 +284,9 @@ pub(crate) async fn attach_routing_policy_to_local_requested_model_input(
                 )
                 .await?
                 .unwrap_or_default();
+            if uses_trusted_relay_profile {
+                selection.source = "trusted_relay_config".to_string();
+            }
             observe_gateway_stage_ms(
                 "routing_group_selection",
                 group_selection_started_at.elapsed().as_millis() as u64,
@@ -382,6 +388,7 @@ pub(crate) async fn attach_routing_policy_to_local_requested_model_input(
             )
             .await;
     }
+    ensure_trusted_relay_model_binding(parts, input.requested_model.as_str())?;
 
     let effective_headers_json = headers_to_routing_value(&effective_headers);
     input.client_session_affinity =
@@ -515,6 +522,63 @@ fn routing_header_value_str(headers: &http::HeaderMap, key: &str) -> Option<Stri
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn explicit_routing_group(parts: &http::request::Parts) -> Option<String> {
+    if parts
+        .extensions
+        .get::<crate::relay::collaboration::TrustedRelayContext>()
+        .is_some()
+    {
+        return parts
+            .extensions
+            .get::<crate::routing::TrustedRelayRoutingProfile>()
+            .map(|profile| profile.route_profile().to_string());
+    }
+
+    routing_header_value_str(&parts.headers, ROUTING_GROUP_HEADER)
+}
+
+fn trusted_relay_routing_profile(
+    parts: &http::request::Parts,
+) -> Result<Option<String>, GatewayError> {
+    let has_trusted_relay_context = parts
+        .extensions
+        .get::<crate::relay::collaboration::TrustedRelayContext>()
+        .is_some();
+    if !has_trusted_relay_context {
+        return Ok(None);
+    }
+    let profile = parts
+        .extensions
+        .get::<crate::routing::TrustedRelayRoutingProfile>()
+        .map(|profile| profile.route_profile().to_string());
+    if profile.is_none() {
+        return Err(GatewayError::Client {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            message: "trusted relay route profile is unavailable".to_string(),
+        });
+    }
+    Ok(profile)
+}
+
+fn ensure_trusted_relay_model_binding(
+    parts: &http::request::Parts,
+    effective_requested_model: &str,
+) -> Result<(), GatewayError> {
+    let Some(context) = parts
+        .extensions
+        .get::<crate::relay::collaboration::TrustedRelayContext>()
+    else {
+        return Ok(());
+    };
+    if context.0.model.trim() == effective_requested_model.trim() {
+        return Ok(());
+    }
+    Err(GatewayError::Client {
+        status: StatusCode::UNAUTHORIZED,
+        message: "invalid Aether relay context binding".to_string(),
+    })
 }
 
 fn routing_group_selection_cache_key(
@@ -819,6 +883,128 @@ mod tests {
                 }),
             }),
         }
+    }
+
+    #[test]
+    fn trusted_relay_profile_overrides_a_client_scheduler_group_header() {
+        let request = http::Request::builder()
+            .header(ROUTING_GROUP_HEADER, "client-forged-group")
+            .body(())
+            .expect("request should build");
+        let (mut parts, _) = request.into_parts();
+        parts
+            .extensions
+            .insert(crate::relay::collaboration::TrustedRelayContext(
+                crate::relay::collaboration::RelayContext {
+                    instance_id: "aether-primary".to_string(),
+                    request_id: "newapi-request-123".to_string(),
+                    subject_id: "subject-1".to_string(),
+                    token_subject_id: "token-subject-1".to_string(),
+                    channel_id: "41".to_string(),
+                    group: "relay-pro".to_string(),
+                    model: "gpt-5".to_string(),
+                    relay_format: "openai".to_string(),
+                    config_revision: 7,
+                    expires_at: 0,
+                },
+            ));
+        parts
+            .extensions
+            .insert(
+                crate::routing::TrustedRelayRoutingProfile::new("balanced")
+                    .expect("trusted relay route profile should build"),
+            );
+
+        assert_eq!(explicit_routing_group(&parts).as_deref(), Some("balanced"));
+        assert_eq!(
+            trusted_relay_routing_profile(&parts)
+                .expect("trusted relay profile should resolve")
+                .as_deref(),
+            Some("balanced")
+        );
+    }
+
+    #[test]
+    fn trusted_relay_request_without_persisted_profile_fails_closed() {
+        let request = http::Request::builder()
+            .header(ROUTING_GROUP_HEADER, "client-forged-group")
+            .body(())
+            .expect("request should build");
+        let (mut parts, _) = request.into_parts();
+        parts
+            .extensions
+            .insert(crate::relay::collaboration::TrustedRelayContext(
+                crate::relay::collaboration::RelayContext {
+                    instance_id: "aether-primary".to_string(),
+                    request_id: "newapi-request-missing-profile".to_string(),
+                    subject_id: "subject-1".to_string(),
+                    token_subject_id: "token-subject-1".to_string(),
+                    channel_id: "41".to_string(),
+                    group: "relay-pro".to_string(),
+                    model: "gpt-5".to_string(),
+                    relay_format: "openai".to_string(),
+                    config_revision: 7,
+                    expires_at: 0,
+                },
+            ));
+
+        let error = trusted_relay_routing_profile(&parts)
+            .expect_err("trusted relay must not fall back to an inbound group header");
+        assert!(matches!(
+            error,
+            GatewayError::Client {
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn trusted_relay_model_binding_rejects_routing_profile_model_rewrite() {
+        let request = http::Request::builder()
+            .body(())
+            .expect("request should build");
+        let (mut parts, _) = request.into_parts();
+        parts
+            .extensions
+            .insert(crate::relay::collaboration::TrustedRelayContext(
+                crate::relay::collaboration::RelayContext {
+                    instance_id: "aether-primary".to_string(),
+                    request_id: "newapi-request-model-rewrite".to_string(),
+                    subject_id: "subject-1".to_string(),
+                    token_subject_id: "token-subject-1".to_string(),
+                    channel_id: "41".to_string(),
+                    group: "relay-pro".to_string(),
+                    model: "gpt-5".to_string(),
+                    relay_format: "openai".to_string(),
+                    config_revision: 7,
+                    expires_at: 0,
+                },
+            ));
+
+        let error = ensure_trusted_relay_model_binding(&parts, "gpt-4.1")
+            .expect_err("routing policy must not change a signed relay model");
+        assert!(matches!(
+            error,
+            GatewayError::Client {
+                status: StatusCode::UNAUTHORIZED,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn client_scheduler_group_header_remains_the_explicit_group_without_relay_context() {
+        let request = http::Request::builder()
+            .header(ROUTING_GROUP_HEADER, "client-selected-group")
+            .body(())
+            .expect("request should build");
+        let (parts, _) = request.into_parts();
+
+        assert_eq!(
+            explicit_routing_group(&parts).as_deref(),
+            Some("client-selected-group")
+        );
     }
 
     fn sample_decision() -> AiExecutionDecision {

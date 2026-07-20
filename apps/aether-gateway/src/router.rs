@@ -35,6 +35,9 @@ pub fn build_router_with_state(state: AppState) -> Router {
     router = api::mount_oauth_routes(router);
     router = api::mount_internal_routes(router);
     router = api::mount_admin_routes(router);
+    router = crate::relay::api::mount_relay_routes(router, state.clone());
+    router = crate::relay::export_api::mount_export_routes(router);
+    router = crate::relay::integrations_api::mount_integrations_routes(router);
     let mut router = router
         .route("/{*path}", any(proxy_request))
         .layer(axum::middleware::from_fn(middleware::access_log_middleware))

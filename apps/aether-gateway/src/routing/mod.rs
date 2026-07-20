@@ -10,6 +10,6 @@ pub(crate) use resolver::{
 };
 pub(crate) use selection::{
     select_gateway_routing_group, GatewayRoutingGroupSelection, GatewayRoutingSelectionError,
-    GatewayRoutingSelectionInput, ROUTING_GROUP_HEADER,
+    GatewayRoutingSelectionInput, TrustedRelayRoutingProfile, ROUTING_GROUP_HEADER,
 };
 pub(crate) use trace::build_routing_trace_seed;

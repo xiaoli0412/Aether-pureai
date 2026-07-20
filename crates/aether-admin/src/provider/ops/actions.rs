@@ -1,6 +1,8 @@
 use super::verify::admin_provider_ops_value_as_f64;
 use serde_json::{json, Map, Value};
 
+const QUOTA_DIVISOR_UNAVAILABLE_ERROR: &str = "无法换算余额：缺少有效的 quota_divisor";
+
 #[derive(Debug, Clone)]
 pub struct ProviderOpsCheckinOutcome {
     pub success: Option<bool>,
@@ -187,7 +189,8 @@ fn parse_new_api_balance_payload(
     let Some(user_data) = user_data.and_then(Value::as_object) else {
         return Err("响应格式无效".to_string());
     };
-    let quota_divisor = quota_divisor(action_config);
+    let quota_divisor =
+        quota_divisor(action_config).ok_or_else(|| QUOTA_DIVISOR_UNAVAILABLE_ERROR.to_string())?;
     let total_available =
         admin_provider_ops_value_as_f64(user_data.get("quota")).map(|value| value / quota_divisor);
     let total_used = admin_provider_ops_value_as_f64(user_data.get("used_quota"))
@@ -408,10 +411,9 @@ fn yescode_balance_extra(combined_data: &Map<String, Value>) -> Map<String, Valu
     extra
 }
 
-fn quota_divisor(action_config: &Map<String, Value>) -> f64 {
+fn quota_divisor(action_config: &Map<String, Value>) -> Option<f64> {
     admin_provider_ops_value_as_f64(action_config.get("quota_divisor"))
-        .filter(|value| *value > 0.0)
-        .unwrap_or(500000.0)
+        .filter(|value| value.is_finite() && *value > 0.0)
 }
 
 fn parse_rfc3339_unix_secs(value: Option<&Value>) -> Option<i64> {
@@ -510,6 +512,53 @@ mod tests {
 
         assert_eq!(payload["total_available"], json!(4552.279822));
         assert_eq!(payload["total_used"], json!(27.720178));
+    }
+
+    #[test]
+    fn new_api_parser_refuses_missing_or_invalid_quota_divisor() {
+        let response = json!({
+            "quota": 1_500_000,
+            "used_quota": 750_000,
+        });
+
+        for config in [
+            json!({}),
+            json!({ "quota_divisor": 0 }),
+            json!({ "quota_divisor": -1 }),
+            json!({ "quota_divisor": "NaN" }),
+            json!({ "quota_divisor": "not-a-number" }),
+        ] {
+            let error = parse_query_balance_payload(
+                "new_api",
+                &config
+                    .as_object()
+                    .cloned()
+                    .expect("config should be object"),
+                &response,
+            )
+            .expect_err("an unverified quota divisor must not fabricate a USD balance");
+
+            assert_eq!(error, "无法换算余额：缺少有效的 quota_divisor");
+        }
+    }
+
+    #[test]
+    fn new_api_parser_uses_an_explicit_nonstandard_quota_divisor() {
+        let payload = parse_query_balance_payload(
+            "new_api",
+            &json!({ "quota_divisor": 750_000 })
+                .as_object()
+                .cloned()
+                .expect("config should be object"),
+            &json!({
+                "quota": 1_500_000,
+                "used_quota": 750_000,
+            }),
+        )
+        .expect("an explicit quota divisor should convert the balance");
+
+        assert_eq!(payload["total_available"], json!(2.0));
+        assert_eq!(payload["total_used"], json!(1.0));
     }
 
     #[test]

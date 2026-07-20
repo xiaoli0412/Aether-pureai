@@ -941,7 +941,7 @@
       v-if="selectedProviderId"
       :open="keyFormDialogOpen"
       :endpoint="null"
-      :provider-type="selectedProviderData?.provider_type || selectedProviderType"
+      :provider-type="keyFormProviderType"
       :editing-key="editingKey"
       :provider-id="selectedProviderId"
       :available-api-formats="selectedProviderData?.api_formats || []"
@@ -1032,6 +1032,7 @@ import type {
   ClaudeCodeAdvancedConfig,
   EndpointAPIKey,
   ProviderEndpoint,
+  ProviderType,
   PoolAdvancedConfig,
   ProviderWithEndpointsSummary,
 } from '@/api/endpoints/types/provider'
@@ -1070,6 +1071,7 @@ import {
   writePoolManagementViewState,
 } from '@/features/pool/utils/poolManagementState'
 import {
+  buildAccountTotalStatsDisplay,
   buildPoolStatsDisplay,
   type PoolCodexCycleStatsGroup,
   type PoolStatsDisplay,
@@ -1368,7 +1370,7 @@ function appendDemandMetricSample(overview: PoolOverviewItem | null): void {
   const existing = providerDemandMetricSamples.value.filter(
     sample => sample.providerId === overview.provider_id,
   )
-  const lastSample = existing.at(-1)
+  const lastSample = existing.length > 0 ? existing[existing.length - 1] : undefined
   if (
     lastSample
     && nextSample.sampledAt - lastSample.sampledAt < 1000
@@ -1485,6 +1487,32 @@ const selectedProviderType = computed(() => {
   if (fromDetail) return fromDetail
   const fromOverview = selectedProviderOverview.value?.provider_type
   return String(fromOverview || '').trim().toLowerCase()
+})
+
+const keyFormProviderTypes = [
+  'custom',
+  'claude_code',
+  'codex',
+  'chatgpt_web',
+  'gemini_cli',
+  'antigravity',
+  'kiro',
+  'grok',
+  'windsurf',
+  'vertex_ai',
+] as const satisfies readonly ProviderType[]
+
+const keyFormProviderType = computed<ProviderType | null>(() => {
+  const providerTypeCandidates = [
+    selectedProviderData.value?.provider_type,
+    selectedProviderOverview.value?.provider_type,
+  ]
+  for (const candidate of providerTypeCandidates) {
+    const normalized = String(candidate ?? '').trim().toLowerCase()
+    const providerType = keyFormProviderTypes.find(value => value === normalized)
+    if (providerType) return providerType
+  }
+  return null
 })
 
 const showCodexStatsModeToggle = computed(() => selectedProviderType.value === 'codex')
@@ -1986,7 +2014,7 @@ function getPoolKeyAccountStatsMetrics(key: PoolKeyDetail): PoolStatsMetric[] {
   const display = getPoolKeyStatsDisplay(key)
   return display.kind === 'account_total'
     ? display.metrics
-    : buildPoolStatsDisplay(key, selectedProviderType.value, 'account_total').metrics
+    : buildAccountTotalStatsDisplay(key).metrics
 }
 
 const quotaRefreshSupported = computed(() => {
@@ -2027,13 +2055,25 @@ function applyQuotaRefreshResultToCurrentPage(result: Awaited<ReturnType<typeof 
   keyPage.value.keys = keyPage.value.keys.map((key) => {
     const quotaSnapshot = quotaByKeyId.get(key.key_id)
     if (!quotaSnapshot) return key
+
+    const statusSnapshot = key.status_snapshot
     return {
       ...key,
       quota_updated_at: quotaSnapshot.updated_at ?? quotaSnapshot.observed_at ?? key.quota_updated_at ?? null,
-      status_snapshot: {
-        ...(key.status_snapshot ?? {}),
-        quota: quotaSnapshot,
-      },
+      status_snapshot: statusSnapshot
+        ? { ...statusSnapshot, quota: quotaSnapshot }
+        : {
+            oauth: { code: key.auth_type === 'oauth' ? 'check_failed' : 'none' },
+            account: {
+              code: key.account_status_code ?? 'unknown',
+              label: key.account_status_label ?? null,
+              reason: key.account_status_reason ?? null,
+              blocked: key.account_status_blocked ?? false,
+              source: key.account_status_source ?? null,
+              recoverable: key.account_status_recoverable,
+            },
+            quota: quotaSnapshot,
+          },
     }
   })
 }

@@ -602,8 +602,8 @@
                       :show-scheduling-mode="false"
                       :subtitle="`仅作用于 ${activePerModelPolicy.model}`"
                       @update:config="updateEditingConfig"
-                      @update:priority-mode="mode => updateModelPriorityMode(activePerModelPolicy.model, mode)"
-                      @update:scheduling-mode="mode => updateModelSchedulingMode(activePerModelPolicy.model, mode)"
+                      @update:priority-mode="mode => activePerModelPolicy && updateModelPriorityMode(activePerModelPolicy.model, mode)"
+                      @update:scheduling-mode="mode => activePerModelPolicy && updateModelSchedulingMode(activePerModelPolicy.model, mode)"
                     />
                   </div>
                 </div>
@@ -659,7 +659,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ChevronDown, ChevronRight, Copy, Key, Layers, Plus, Save, Star, Trash2 } from 'lucide-vue-next'
+import { ChevronDown, ChevronRight, Copy, Key, Layers, Plus, Save, SlidersHorizontal, Star, Trash2 } from 'lucide-vue-next'
 
 import { PageContainer } from '@/components/layout'
 import { Badge, Button, Card, Input, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, TableCard } from '@/components/ui'
@@ -1301,10 +1301,11 @@ async function saveDraft(): Promise<void> {
       is_system_default: draft.value.is_system_default,
       config_json: config,
     }
-    const wasCreating = isCreating.value || !draft.value.id
-    const saved = wasCreating
-      ? await createRoutingGroup(payload)
-      : await updateRoutingGroup(draft.value.id, payload)
+    const existingGroupId = isCreating.value ? undefined : draft.value.id
+    const wasCreating = !existingGroupId
+    const saved = existingGroupId
+      ? await updateRoutingGroup(existingGroupId, payload)
+      : await createRoutingGroup(payload)
     isCreating.value = false
     replaceGroup(saved)
     if (wasCreating) {

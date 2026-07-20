@@ -1,3 +1,4 @@
+use aether_routing_core::RoutingSchedulingMode;
 use async_trait::async_trait;
 use std::collections::VecDeque;
 use tracing::warn;
@@ -178,7 +179,13 @@ impl LocalOpenAiChatStreamAttemptSource<'_> {
     async fn next_raw_attempt_with_target_select(
         &mut self,
     ) -> Result<Option<LocalOpenAiChatCandidateAttempt>, GatewayError> {
-        let select_window = openai_chat_stream_target_select_window();
+        let select_window = stream_target_select_window_for_routing_policy(
+            self.input
+                .routing_policy
+                .as_ref()
+                .map(|policy| policy.scheduling_mode),
+            openai_chat_stream_target_select_window(),
+        );
         if select_window <= 1 {
             return self.next_raw_attempt_linear().await;
         }
@@ -334,6 +341,17 @@ fn openai_chat_stream_target_select_window() -> usize {
         .filter(|value| *value > 0)
         .unwrap_or(DEFAULT_OPENAI_CHAT_STREAM_TARGET_SELECT_WINDOW)
         .clamp(1, MAX_OPENAI_CHAT_STREAM_TARGET_SELECT_WINDOW)
+}
+
+fn stream_target_select_window_for_routing_policy(
+    scheduling_mode: Option<RoutingSchedulingMode>,
+    configured_window: usize,
+) -> usize {
+    if scheduling_mode == Some(RoutingSchedulingMode::FixedOrder) {
+        1
+    } else {
+        configured_window
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -493,6 +511,29 @@ mod tests {
             target_select_score(7, "http://127.0.0.1:18182|proxy=-", &idle, 1, 0, 10)
                 < target_select_score(7, "http://127.0.0.1:18181|proxy=-", &busy, 0, 5, 0)
         );
+    }
+
+    #[test]
+    fn fixed_order_routing_policy_keeps_stream_attempts_in_ranked_order() {
+        assert_eq!(
+            stream_target_select_window_for_routing_policy(
+                Some(RoutingSchedulingMode::FixedOrder),
+                2,
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn non_fixed_order_routing_policy_keeps_configured_stream_target_window() {
+        assert_eq!(
+            stream_target_select_window_for_routing_policy(
+                Some(RoutingSchedulingMode::LoadBalance),
+                2,
+            ),
+            2
+        );
+        assert_eq!(stream_target_select_window_for_routing_policy(None, 2), 2);
     }
 
     #[test]

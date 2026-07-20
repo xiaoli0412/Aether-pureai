@@ -382,12 +382,21 @@ vi.mock('@/features/providers/components/KeyAllowedModelsEditDialog.vue', async 
   }
 })
 vi.mock('@/features/providers/components/KeyFormDialog.vue', async () => {
-  const { defineComponent } = await import('vue')
+  const { defineComponent, h } = await import('vue')
   return {
     default: defineComponent({
       name: 'KeyFormDialogStub',
-      setup() {
-        return () => null
+      props: {
+        providerType: {
+          type: String,
+          default: null,
+        },
+      },
+      setup(props) {
+        return () => h('span', {
+          'data-testid': 'key-form-provider-type',
+          'data-provider-type': props.providerType ?? '',
+        })
       },
     }),
   }
@@ -574,6 +583,18 @@ afterEach(() => {
 })
 
 describe('PoolManagement Codex cycle stats mode', () => {
+  it('uses the overview provider type when the detail type is unsupported', async () => {
+    const codexKey = createPoolKey('codex')
+    endpointMocks.getPoolOverview.mockResolvedValue({ items: [createOverview('codex')] })
+    endpointMocks.listPoolKeys.mockResolvedValue(createKeyPage(codexKey))
+    endpointMocks.getProvider.mockResolvedValue(createProvider('unsupported_provider'))
+
+    const root = mountPoolManagement()
+    await settle()
+
+    expect(root.querySelector('[data-testid="key-form-provider-type"]')?.getAttribute('data-provider-type')).toBe('codex')
+  })
+
   it('renders Codex current-cycle stats by default with a header icon toggle', async () => {
     const codexKey = createPoolKey('codex')
     endpointMocks.getPoolOverview.mockResolvedValue({ items: [createOverview('codex')] })

@@ -6,6 +6,27 @@ use thiserror::Error;
 
 pub(crate) const ROUTING_GROUP_HEADER: &str = "x-aether-scheduler-group";
 
+/// A routing profile selected by the persisted New API integration config after
+/// the relay request has been authenticated. It is an internal extension, not
+/// an inbound client-selectable header.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TrustedRelayRoutingProfile {
+    route_profile: String,
+}
+
+impl TrustedRelayRoutingProfile {
+    pub(crate) fn new(route_profile: &str) -> Option<Self> {
+        let route_profile = route_profile.trim();
+        (!route_profile.is_empty()).then(|| Self {
+            route_profile: route_profile.to_string(),
+        })
+    }
+
+    pub(crate) fn route_profile(&self) -> &str {
+        self.route_profile.as_str()
+    }
+}
+
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub(crate) enum GatewayRoutingSelectionError {
     #[error("routing group was explicitly requested but was not found: {0}")]
@@ -164,6 +185,17 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn trusted_relay_routing_profile_trims_and_rejects_blank_values() {
+        assert_eq!(
+            TrustedRelayRoutingProfile::new(" balanced ")
+                .expect("non-blank profile should be accepted")
+                .route_profile(),
+            "balanced"
+        );
+        assert!(TrustedRelayRoutingProfile::new(" \t ").is_none());
+    }
 
     #[tokio::test]
     async fn selects_api_key_default_binding() {

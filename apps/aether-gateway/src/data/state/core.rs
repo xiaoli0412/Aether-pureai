@@ -442,6 +442,47 @@ impl GatewayDataState {
             .and_then(|backends| backends.database_driver())
     }
 
+    pub(crate) fn relay_event_inbox_store(
+        &self,
+    ) -> Option<aether_data::repository::relay_events::RelayEventInboxStore> {
+        self.backends
+            .as_ref()
+            .and_then(aether_data::repository::relay_events::RelayEventInboxStore::from_backends)
+    }
+
+    pub(crate) fn relay_event_outbox_store(
+        &self,
+    ) -> Option<aether_data::repository::relay_events::RelayEventOutboxStore> {
+        self.backends
+            .as_ref()
+            .and_then(aether_data::repository::relay_events::RelayEventOutboxStore::from_backends)
+    }
+
+    pub(crate) fn relay_downstream_group_store(
+        &self,
+    ) -> Option<aether_data::repository::relay_groups::RelayDownstreamGroupStore> {
+        self.backends.as_ref().and_then(
+            aether_data::repository::relay_groups::RelayDownstreamGroupStore::from_backends,
+        )
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn relay_profit_ledger_store(
+        &self,
+    ) -> Option<aether_data::repository::relay_profit::RelayProfitLedgerStore> {
+        self.backends.as_ref().and_then(
+            aether_data::repository::relay_profit::RelayProfitLedgerStore::from_backends,
+        )
+    }
+
+    pub(crate) fn integration_config_store(
+        &self,
+    ) -> Option<aether_data::repository::integration_configs::IntegrationConfigStore> {
+        self.backends.as_ref().and_then(
+            aether_data::repository::integration_configs::IntegrationConfigStore::from_backends,
+        )
+    }
+
     pub(crate) fn has_provider_quota_writer(&self) -> bool {
         self.provider_quota_writer.is_some()
     }

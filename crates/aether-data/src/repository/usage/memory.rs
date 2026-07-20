@@ -1031,15 +1031,10 @@ fn usage_effective_input_tokens(item: &StoredRequestUsageAudit) -> u64 {
         .as_deref()
         .or(item.api_format.as_deref());
     let input_tokens = i64::try_from(item.input_tokens).unwrap_or(i64::MAX);
-    let cache_creation_tokens =
-        i64::try_from(usage_cache_creation_tokens(item)).unwrap_or(i64::MAX);
     let cache_read_tokens = i64::try_from(item.cache_read_input_tokens).unwrap_or(i64::MAX);
-    normalize_usage_input_tokens(
-        api_format,
-        input_tokens,
-        cache_creation_tokens,
-        cache_read_tokens,
-    ) as u64
+
+    // Cache creation is recorded separately in usage totals, while cache reads overlap.
+    normalize_usage_input_tokens(api_format, input_tokens, 0, cache_read_tokens) as u64
 }
 
 fn usage_total_tokens(item: &StoredRequestUsageAudit) -> u64 {

@@ -1,6 +1,6 @@
 use super::support::{
-    AdminProviderOpsQuotaAlertConfigRequest, AdminProviderOpsSaveConfigRequest,
-    ADMIN_PROVIDER_OPS_SENSITIVE_FIELDS,
+    AdminProviderOpsActionConfigRequest, AdminProviderOpsQuotaAlertConfigRequest,
+    AdminProviderOpsSaveConfigRequest, ADMIN_PROVIDER_OPS_SENSITIVE_FIELDS,
 };
 use crate::handlers::admin::request::AdminAppState;
 use crate::GatewayError;
@@ -8,7 +8,8 @@ use aether_admin::provider::ops as admin_provider_ops_pure;
 use aether_data_contracts::repository::provider_catalog::{
     StoredProviderCatalogEndpoint, StoredProviderCatalogProvider,
 };
-use serde_json::json;
+use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const PROVIDER_OPS_QUOTA_ALERT_DEFAULT_FETCH_INTERVAL_SECS: u64 = 30;
@@ -255,8 +256,13 @@ pub(super) async fn persist_admin_provider_ops_runtime_credentials(
 pub(super) fn build_admin_provider_ops_saved_config_value(
     state: &AdminAppState<'_>,
     provider: &StoredProviderCatalogProvider,
-    payload: AdminProviderOpsSaveConfigRequest,
+    mut payload: AdminProviderOpsSaveConfigRequest,
 ) -> Result<serde_json::Value, String> {
+    normalize_admin_provider_ops_query_balance_config(
+        payload.architecture_id.as_str(),
+        &mut payload.actions,
+    )?;
+
     let auth_type = payload.connector.auth_type.trim().to_string();
     if auth_type.is_empty() || !admin_provider_ops_is_supported_auth_type(auth_type.as_str()) {
         return Err("connector.auth_type 必须是合法的认证类型".to_string());
@@ -297,6 +303,39 @@ pub(super) fn build_admin_provider_ops_saved_config_value(
         "schedule": payload.schedule,
         "quota_alert": quota_alert,
     }))
+}
+
+fn normalize_admin_provider_ops_query_balance_config(
+    architecture_id: &str,
+    actions: &mut BTreeMap<String, AdminProviderOpsActionConfigRequest>,
+) -> Result<(), String> {
+    let normalized_architecture =
+        admin_provider_ops_pure::normalize_architecture_id(architecture_id);
+    if !matches!(
+        normalized_architecture,
+        "generic_api" | "new_api" | "anyrouter" | "done_hub"
+    ) {
+        return Ok(());
+    }
+
+    let query_balance = actions
+        .get_mut("query_balance")
+        .ok_or_else(|| "query_balance.config.quota_divisor 必须是有限的正数".to_string())?;
+    let quota_divisor = admin_provider_ops_quota_divisor(query_balance.config.get("quota_divisor"))
+        .ok_or_else(|| "query_balance.config.quota_divisor 必须是有限的正数".to_string())?;
+    query_balance
+        .config
+        .insert("quota_divisor".to_string(), json!(quota_divisor));
+    Ok(())
+}
+
+fn admin_provider_ops_quota_divisor(value: Option<&Value>) -> Option<f64> {
+    match value {
+        Some(Value::Number(number)) => number.as_f64(),
+        Some(Value::String(raw)) => raw.trim().parse::<f64>().ok(),
+        _ => None,
+    }
+    .filter(|value| value.is_finite() && *value > 0.0)
 }
 
 fn normalize_admin_provider_ops_quota_alert(
@@ -409,4 +448,65 @@ pub(super) fn build_admin_provider_ops_config_payload(
             .cloned()
             .unwrap_or_else(default_admin_provider_ops_quota_alert),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        normalize_admin_provider_ops_query_balance_config, AdminProviderOpsActionConfigRequest,
+    };
+    use serde_json::{json, Map, Value};
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn query_balance_quota_divisor_is_required_for_all_new_api_compatible_architectures() {
+        let expected_error = "query_balance.config.quota_divisor 必须是有限的正数";
+        for architecture_id in ["generic_api", "new_api", "anyrouter", "done_hub"] {
+            let error = normalize_admin_provider_ops_query_balance_config(
+                architecture_id,
+                &mut BTreeMap::new(),
+            )
+            .expect_err("a money conversion must not be inferred");
+            assert_eq!(error, expected_error);
+        }
+    }
+
+    #[test]
+    fn query_balance_quota_divisor_is_normalized_before_persistence() {
+        let mut actions = BTreeMap::from([(
+            "query_balance".to_string(),
+            AdminProviderOpsActionConfigRequest {
+                enabled: true,
+                config: json!({ "quota_divisor": "750000" })
+                    .as_object()
+                    .cloned()
+                    .expect("config should be an object"),
+            },
+        )]);
+
+        normalize_admin_provider_ops_query_balance_config("anyrouter", &mut actions)
+            .expect("a finite positive divisor should be accepted");
+
+        let divisor = actions
+            .get("query_balance")
+            .and_then(|action| action.config.get("quota_divisor"));
+        assert_eq!(divisor, Some(&json!(750000.0)));
+    }
+
+    #[test]
+    fn query_balance_quota_divisor_rejects_non_finite_or_non_positive_values() {
+        for value in [json!(0), json!(-1), json!("NaN"), Value::Null] {
+            let mut actions = BTreeMap::from([(
+                "query_balance".to_string(),
+                AdminProviderOpsActionConfigRequest {
+                    enabled: true,
+                    config: Map::from_iter([("quota_divisor".to_string(), value)]),
+                },
+            )]);
+
+            let error = normalize_admin_provider_ops_query_balance_config("new_api", &mut actions)
+                .expect_err("an invalid divisor must fail closed");
+            assert_eq!(error, "query_balance.config.quota_divisor 必须是有限的正数");
+        }
+    }
 }

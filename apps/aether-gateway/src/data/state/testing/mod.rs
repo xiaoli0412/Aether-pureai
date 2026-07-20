@@ -4,6 +4,9 @@ use std::sync::{Arc, RwLock};
 use aether_data_contracts::repository::candidates::RequestCandidateRepository;
 use aether_data_contracts::repository::pool_scores::PoolMemberScoreRepository;
 use aether_data_contracts::repository::quota::ProviderQuotaRepository;
+use aether_data_contracts::repository::routing_profiles::{
+    RoutingGroupReadRepository, RoutingGroupWriteRepository,
+};
 use aether_data_contracts::repository::usage::UsageRepository;
 
 use super::{
@@ -298,6 +301,18 @@ impl GatewayDataState {
         repository: Arc<dyn GlobalModelReadRepository>,
     ) -> Self {
         self.global_model_reader = Some(repository);
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_routing_group_repository_for_tests<T>(mut self, repository: Arc<T>) -> Self
+    where
+        T: RoutingGroupReadRepository + RoutingGroupWriteRepository + 'static,
+    {
+        let routing_group_reader: Arc<dyn RoutingGroupReadRepository> = repository.clone();
+        let routing_group_writer: Arc<dyn RoutingGroupWriteRepository> = repository;
+        self.routing_group_reader = Some(routing_group_reader);
+        self.routing_group_writer = Some(routing_group_writer);
         self
     }
 

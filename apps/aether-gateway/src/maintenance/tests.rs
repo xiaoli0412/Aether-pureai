@@ -157,6 +157,14 @@ async fn gateway_provider_checkin_runs_local_query_balance_for_configured_provid
                                 "live-secret-api-key",
                             ).expect("api key should encrypt"),
                         }
+                    },
+                    "actions": {
+                        "query_balance": {
+                            "enabled": true,
+                            "config": {
+                                "quota_divisor": 500000
+                            }
+                        }
                     }
                 }
             })),
@@ -284,6 +292,14 @@ async fn gateway_provider_checkin_counts_anyrouter_auto_signin_as_success() {
                                 DEVELOPMENT_ENCRYPTION_KEY,
                                 "session=MTIzfGVIaDRlQUpwWkFOcGJuU3F1d0RfVkhsNWVYa0lkWE5sY201aGJXVUdjM1J5YVc1bkRCQUFCV0ZzYVdObHxzaWc",
                             ).expect("session cookie should encrypt"),
+                        }
+                    },
+                    "actions": {
+                        "query_balance": {
+                            "enabled": true,
+                            "config": {
+                                "quota_divisor": 500000
+                            }
                         }
                     }
                 }

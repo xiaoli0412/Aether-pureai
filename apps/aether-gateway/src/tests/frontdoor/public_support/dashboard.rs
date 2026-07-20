@@ -990,16 +990,18 @@ async fn gateway_handles_dashboard_recent_requests_locally_without_proxying_upst
         "refresh-dashboard-recent",
         now,
     );
+    let mut recent_usage = sample_user_usage_audit(
+        "usage-dashboard-1",
+        "req-dashboard-1",
+        "user-auth-1",
+        "gpt-5",
+        "OpenAI",
+        "completed",
+        now - chrono::Duration::minutes(5),
+    );
+    recent_usage.cache_creation_input_tokens = 0;
     let usage_repository = Arc::new(InMemoryUsageReadRepository::seed(vec![
-        sample_user_usage_audit(
-            "usage-dashboard-1",
-            "req-dashboard-1",
-            "user-auth-1",
-            "gpt-5",
-            "OpenAI",
-            "completed",
-            now - chrono::Duration::minutes(5),
-        ),
+        recent_usage,
         sample_user_usage_audit(
             "usage-dashboard-2",
             "req-dashboard-2",
@@ -1037,7 +1039,7 @@ async fn gateway_handles_dashboard_recent_requests_locally_without_proxying_upst
     assert_eq!(requests[0]["id"], "usage-dashboard-1");
     assert_eq!(requests[0]["user"], "alice");
     assert_eq!(requests[0]["model"], "gpt-5");
-    assert_eq!(requests[0]["tokens"], 150);
+    assert_eq!(requests[0]["tokens"], 160);
     assert_eq!(requests[0]["is_stream"], false);
     assert!(requests[0]["time"].as_str().is_some());
     assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);

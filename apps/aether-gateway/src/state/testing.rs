@@ -22,6 +22,15 @@ impl AppState {
         self
     }
 
+    pub(crate) fn with_relay_integration_config_store_for_tests(
+        mut self,
+        store: aether_data::repository::integration_configs::IntegrationConfigStore,
+    ) -> Self {
+        self.relay_integration_config_store_override =
+            Some(crate::state::app::TestRelayIntegrationConfigStore(store));
+        self
+    }
+
     pub(crate) fn without_request_candidate_queue_for_tests(mut self) -> Self {
         self.request_candidate_queue = None;
         self

@@ -57,6 +57,7 @@ pub(crate) fn build_gemini_sync_plan_from_decision(
         .take()
         .or_else(|| Some("application/json".to_string()));
     let report_context = augment_sync_report_context(
+        parts,
         payload.report_context.take(),
         &provider_request_headers,
         &provider_request_body_value,
@@ -125,6 +126,7 @@ pub(crate) fn build_gemini_stream_plan_from_decision(
         .take()
         .or_else(|| Some("application/json".to_string()));
     let report_context = augment_sync_report_context(
+        parts,
         payload.report_context.take(),
         &provider_request_headers,
         &provider_request_body_value,

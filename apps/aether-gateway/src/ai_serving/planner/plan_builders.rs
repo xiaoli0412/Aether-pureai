@@ -37,14 +37,20 @@ pub(crate) use standard_builders::{
 };
 
 pub(super) fn augment_sync_report_context(
+    parts: &http::request::Parts,
     report_context: Option<serde_json::Value>,
     provider_request_headers: &BTreeMap<String, String>,
     provider_request_body: &serde_json::Value,
 ) -> Result<Option<serde_json::Value>, GatewayError> {
-    augment_sync_report_context_impl(
+    let mut report_context = augment_sync_report_context_impl(
         report_context,
         provider_request_headers,
         provider_request_body,
     )
-    .map_err(|err| GatewayError::Internal(err.to_string()))
+    .map_err(|err| GatewayError::Internal(err.to_string()))?;
+    crate::relay::collaboration::apply_trusted_relay_usage_metadata_to_report_context(
+        parts,
+        &mut report_context,
+    );
+    Ok(report_context)
 }

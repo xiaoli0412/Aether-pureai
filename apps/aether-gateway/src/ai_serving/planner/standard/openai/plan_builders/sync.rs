@@ -95,11 +95,16 @@ pub(crate) fn build_openai_chat_sync_plan_from_decision(
             build_from_request_when_empty: true,
             accept_policy: StandardPlanFallbackAcceptPolicy::TextEventStreamIfStreaming,
         });
+    crate::relay::collaboration::apply_trusted_relay_request_id_to_provider_headers(
+        parts,
+        &mut provider_request_headers,
+    );
     let content_type = payload
         .content_type
         .take()
         .or_else(|| Some("application/json".to_string()));
     let report_context = augment_sync_report_context(
+        parts,
         payload.report_context.take(),
         &provider_request_headers,
         &provider_request_body_value,
@@ -177,11 +182,16 @@ pub(crate) fn build_openai_responses_sync_plan_from_decision(
             build_from_request_when_empty: false,
             accept_policy: StandardPlanFallbackAcceptPolicy::TextEventStreamIfStreaming,
         });
+    crate::relay::collaboration::apply_trusted_relay_request_id_to_provider_headers(
+        parts,
+        &mut provider_request_headers,
+    );
     let content_type = payload
         .content_type
         .take()
         .or_else(|| Some("application/json".to_string()));
     let report_context = augment_sync_report_context(
+        parts,
         payload.report_context.take(),
         &provider_request_headers,
         &provider_request_body_value,

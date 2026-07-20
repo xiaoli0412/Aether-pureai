@@ -64,6 +64,7 @@ mod provider_key_auth;
 mod provider_pool_demand;
 pub(crate) use aether_provider_transport as provider_transport;
 mod rate_limit;
+mod relay;
 mod request_candidate_queue;
 mod request_candidate_runtime;
 mod request_diagnostics;

@@ -76,14 +76,14 @@
           class="min-w-0 flex-1 flex justify-center"
         >
           <Button
-            v-if="action.key !== 'providerProxy' && action.key !== 'refresh'"
+            v-if="isHeaderAction(action)"
             variant="ghost"
             size="icon"
             class="h-8 w-8 shrink-0"
             :class="action.key === 'toggleProvider' ? providerToggleButtonClass : ''"
             :disabled="action.key === 'toggleProvider' ? togglingProviderStatus : false"
             :title="action.title"
-            @click="emit(action.event)"
+            @click="dispatchHeaderAction(action.event)"
           >
             <component
               :is="action.icon"
@@ -225,7 +225,7 @@
           :disabled="action.key === 'toggleProvider' ? togglingProviderStatus : false"
           :data-testid="action.key === 'demandMetrics' ? 'pool-demand-metrics-button' : undefined"
           :title="action.title"
-          @click="emit(action.event)"
+          @click="dispatchHeaderAction(action.event)"
         >
           <component
             :is="action.icon"
@@ -281,24 +281,18 @@ type HeaderActionEvent =
   | 'advanced'
   | 'toggleProvider'
 
-type HeaderActionKey =
-  | 'import'
-  | 'providerProxy'
-  | 'scheduling'
-  | 'accountBatch'
-  | 'editProvider'
-  | 'editEndpoint'
-  | 'demandMetrics'
-  | 'advanced'
-  | 'toggleProvider'
-  | 'refresh'
-
 interface HeaderAction {
-  key: HeaderActionKey
+  key: HeaderActionEvent
   title: string
   event: HeaderActionEvent
   icon: unknown
 }
+
+interface ReservedHeaderAction {
+  key: 'providerProxy' | 'refresh'
+}
+
+type MobileHeaderAction = HeaderAction | ReservedHeaderAction
 
 const props = withDefaults(defineProps<{
   providers: PoolOverviewItem[]
@@ -364,8 +358,40 @@ const searchModel = computed({
 
 const hasSelectedProvider = computed(() => Boolean(props.providerId))
 
+const isHeaderAction = (action: MobileHeaderAction): action is HeaderAction =>
+  action.key !== 'providerProxy' && action.key !== 'refresh'
+
+const dispatchHeaderAction = (event: HeaderActionEvent) => {
+  switch (event) {
+    case 'import':
+      emit('import')
+      break
+    case 'scheduling':
+      emit('scheduling')
+      break
+    case 'accountBatch':
+      emit('accountBatch')
+      break
+    case 'editProvider':
+      emit('editProvider')
+      break
+    case 'editEndpoint':
+      emit('editEndpoint')
+      break
+    case 'demandMetrics':
+      emit('demandMetrics')
+      break
+    case 'advanced':
+      emit('advanced')
+      break
+    case 'toggleProvider':
+      emit('toggleProvider')
+      break
+  }
+}
+
 const mobileActions = computed(() => {
-  const actions: Array<HeaderAction | { key: 'providerProxy' | 'refresh' }> = [
+  const actions: MobileHeaderAction[] = [
     { key: 'import', title: legacyT('添加账号'), event: 'import', icon: Upload },
     { key: 'providerProxy' },
     { key: 'scheduling', title: legacyT('号池调度'), event: 'scheduling', icon: SlidersHorizontal },

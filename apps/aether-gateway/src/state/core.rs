@@ -332,6 +332,9 @@ impl AppState {
                 data,
                 runtime_state.clone(),
             ),
+            relay_engine: None,
+            #[cfg(test)]
+            relay_integration_config_store_override: None,
             provider_transport_snapshot_cache: Arc::new(DashMap::new()),
             provider_transport_snapshot_inflight: Arc::new(DashMap::new()),
             provider_key_rpm_resets: Arc::new(StdMutex::new(HashMap::new())),
@@ -402,6 +405,140 @@ impl AppState {
     ) -> Result<Self, aether_data::DataLayerError> {
         self.replace_data_state(Arc::new(GatewayDataState::from_config(config)?));
         Ok(self)
+    }
+
+    /// Get reference to the Relay Engine if enabled
+    pub(crate) fn relay_engine(&self) -> Option<&crate::relay::RelayEngine> {
+        self.relay_engine.as_deref()
+    }
+
+    pub(crate) fn relay_integration_config_store(
+        &self,
+    ) -> Option<aether_data::repository::integration_configs::IntegrationConfigStore> {
+        #[cfg(test)]
+        if let Some(store) = &self.relay_integration_config_store_override {
+            return Some(store.0.clone());
+        }
+        self.data.integration_config_store()
+    }
+
+    /// Initialize and configure the Relay Engine (called after database is ready)
+    pub fn configure_relay_engine(&mut self) {
+        let config = crate::relay::RelayEngineConfig::from_env();
+        self.configure_relay_engine_with_config(config);
+    }
+
+    pub(crate) fn configure_relay_engine_with_config(
+        &mut self,
+        config: crate::relay::RelayEngineConfig,
+    ) {
+        let verifier =
+            crate::relay::collaboration::RelayVerifier::from_env((*self.runtime_state).clone());
+        self.configure_relay_engine_components(config, verifier);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn configure_relay_engine_with_config_and_verifier(
+        &mut self,
+        config: crate::relay::RelayEngineConfig,
+        verifier: crate::relay::collaboration::RelayVerifier,
+    ) {
+        self.configure_relay_engine_components(config, Some(verifier));
+    }
+
+    fn configure_relay_engine_components(
+        &mut self,
+        config: crate::relay::RelayEngineConfig,
+        verifier: Option<crate::relay::collaboration::RelayVerifier>,
+    ) {
+        use crate::relay::balance_monitor::BalanceMonitor;
+        use crate::relay::config::ChannelConfigStore;
+        use crate::relay::discovery::PriceDiscoveryService;
+        use crate::relay::event_consumer::{SyncConsumer, SyncConsumerConfig};
+        use crate::relay::event_outbox::EventOutbox;
+        use crate::relay::health::HealthStore;
+        use crate::relay::profit::ProfitLedgerWriter;
+        use crate::relay::reconcile::ReconciliationService;
+        use crate::relay::routing::RouteSelectionService;
+        use crate::relay::RelayEngine;
+
+        if !config.enabled {
+            self.relay_engine = None;
+            tracing::info!("relay engine disabled (set AETHER_RELAY_ENABLED=true to enable)");
+            return;
+        }
+
+        let config = Arc::new(config);
+        let runtime_state = (*self.runtime_state).clone();
+
+        let config_store = Arc::new(ChannelConfigStore::new(runtime_state.clone()));
+        let price_discovery = Arc::new(PriceDiscoveryService::new(
+            Arc::clone(&config),
+            runtime_state.clone(),
+            Arc::clone(&config_store),
+        ));
+        let health_store = Arc::new(HealthStore::new(Arc::clone(&config), runtime_state.clone()));
+        let route_service = Arc::new(RouteSelectionService::new(
+            Arc::clone(&config),
+            Arc::clone(&config_store),
+            Arc::clone(&price_discovery),
+            Arc::clone(&health_store),
+        ));
+        let (profit_writer, profit_receiver) = ProfitLedgerWriter::new(Arc::clone(&config));
+        let profit_writer = Arc::new(profit_writer);
+        let profit_store = self.data.relay_profit_ledger_store();
+        let instance_id =
+            std::env::var("AETHER_INSTANCE_ID").unwrap_or_else(|_| "default".to_string());
+        let reconciler = Arc::new(ReconciliationService::new(
+            Arc::clone(&config),
+            runtime_state.clone(),
+            profit_store.clone(),
+            instance_id.clone(),
+        ));
+        let balance_monitor = Arc::new(BalanceMonitor::new(
+            Arc::clone(&config),
+            runtime_state.clone(),
+            Arc::clone(&config_store),
+            Arc::clone(&health_store),
+            Arc::clone(&price_discovery.upstream_client),
+        ));
+        let sync_consumer = match (
+            SyncConsumerConfig::from_env(),
+            self.data.relay_event_inbox_store(),
+            profit_store.as_ref(),
+        ) {
+            (Some(consumer_config), Some(event_store), Some(_)) => Some(Arc::new(
+                SyncConsumer::new(consumer_config, event_store, Arc::clone(&profit_writer)),
+            )),
+            _ => None,
+        };
+        let event_outbox = self
+            .data
+            .relay_event_outbox_store()
+            .map(|store| Arc::new(EventOutbox::new(store, instance_id.clone())));
+
+        let engine = RelayEngine {
+            config,
+            instance_id,
+            config_store,
+            price_discovery,
+            health_store,
+            route_service,
+            profit_writer,
+            profit_receiver: Arc::new(std::sync::Mutex::new(Some(profit_receiver))),
+            profit_store,
+            profit_data: Arc::clone(&self.data),
+            reconciler,
+            relay_verifier: verifier.map(Arc::new),
+            routing_mode: crate::relay::collaboration::RoutingMode::from_env(),
+            balance_monitor,
+            sync_consumer,
+            event_outbox,
+            background_shutdown: RelayEngine::background_shutdown_sender(),
+        };
+
+        tracing::info!("relay engine initialized and enabled");
+        self.relay_engine = Some(Arc::new(engine));
     }
 
     pub fn with_tunnel_identity(
@@ -1604,6 +1741,11 @@ impl AppState {
             crate::backup::worker::S3_BACKUP_WORKER_TASK_KEY,
             crate::backup::worker::spawn_s3_backup_worker(self.clone()),
         );
+        if let Some(relay_engine) = self.relay_engine() {
+            for (task_key, handle) in relay_engine.spawn_background_tasks() {
+                supervise_worker(task_key, Some(handle));
+            }
+        }
 
         supervisor
     }
@@ -2798,6 +2940,26 @@ mod tests {
     use super::AppState;
     use crate::cache::SchedulerAffinityTarget;
     use crate::data::GatewayDataState;
+
+    #[test]
+    fn relay_engine_is_not_initialized_when_configuration_is_disabled() {
+        let mut state = AppState::new().expect("app state should build");
+
+        state.configure_relay_engine_with_config(crate::relay::RelayEngineConfig::default());
+
+        assert!(state.relay_engine().is_none());
+    }
+
+    #[test]
+    fn relay_engine_is_initialized_when_configuration_is_enabled() {
+        let mut state = AppState::new().expect("app state should build");
+        let mut config = crate::relay::RelayEngineConfig::default();
+        config.enabled = true;
+
+        state.configure_relay_engine_with_config(config);
+
+        assert!(state.relay_engine().is_some());
+    }
 
     #[tokio::test]
     async fn system_config_reads_use_short_lived_cache_until_app_invalidation() {

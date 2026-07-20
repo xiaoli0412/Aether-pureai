@@ -1403,15 +1403,10 @@ pub fn admin_usage_effective_input_tokens(item: &StoredRequestUsageAudit) -> u64
         .as_deref()
         .or(item.api_format.as_deref());
     let input_tokens = i64::try_from(item.input_tokens).unwrap_or(i64::MAX);
-    let cache_creation_tokens =
-        i64::try_from(admin_usage_cache_creation_tokens(item)).unwrap_or(i64::MAX);
     let cache_read_tokens = i64::try_from(item.cache_read_input_tokens).unwrap_or(i64::MAX);
-    normalize_input_tokens_for_billing(
-        api_format,
-        input_tokens,
-        cache_creation_tokens,
-        cache_read_tokens,
-    ) as u64
+
+    // Cache creation is reported as a separate admin usage dimension, while cache reads overlap.
+    normalize_input_tokens_for_billing(api_format, input_tokens, 0, cache_read_tokens) as u64
 }
 
 pub fn admin_usage_token_cache_hit_rate(total_input_context: u64, cache_read_tokens: u64) -> f64 {

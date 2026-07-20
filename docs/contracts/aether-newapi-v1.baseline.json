@@ -1,0 +1,23 @@
+{
+  "baseline_format": "aether-newapi-contract-baseline/v1",
+  "baseline_revision": 6,
+  "contract_version": "aether-newapi/v1",
+  "schema_revision": 4,
+  "bundle_sha256": "f26b9a014e66c8715372d0d41c166b2782bca54c64ffacad933b00c73b12a168",
+  "file_sha256": {
+    "aether-newapi-v1.json": "3d474337adcb0a7c19c6eef65ce52259b91a1f1b0c3af1d0f8fa658514f28f0f",
+    "aether-newapi-v1.schema.json": "60e6aa8c9f3270e16e6d9815fb187c632ba06a363405fe382311bfe595cb5191",
+    "aether-newapi-v1.examples.json": "85ce2790316a28a91f88f34ffd559979989e56019e2103d1b59bd693e5a4bf2c"
+  },
+  "tracked_files": [
+    "aether-newapi-v1.json",
+    "aether-newapi-v1.schema.json",
+    "aether-newapi-v1.examples.json"
+  ],
+  "change_control": {
+    "change_id": "aether-newapi-v1-baseline-2026-07-18-instance-status-response",
+    "recorded_at": "2026-07-18",
+    "review_policy": "cross-repository-review-required",
+    "rationale": "Add a machine-verifiable instance status response that reports control execution readiness rather than an upstream SLA, while retaining credential rotation capability gating, the instance-bound control HMAC v2 vector, and negotiated capability examples."
+  }
+}

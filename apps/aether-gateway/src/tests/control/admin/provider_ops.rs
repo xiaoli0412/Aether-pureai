@@ -531,6 +531,56 @@ async fn gateway_saves_admin_provider_ops_config_locally_with_trusted_admin_prin
     );
     let (gateway_url, gateway_handle) = start_server(gateway).await;
 
+    let mut save_config_payload = json!({
+        "architecture_id": "anyrouter",
+        "base_url": "https://ops.example",
+        "connector": {
+            "auth_type": "api_key",
+            "config": {
+                "tenant": "acme"
+            },
+            "credentials": {
+                "refresh_token": "************",
+                "api_key": "live-secret-api-key",
+            }
+        },
+        "actions": {
+            "query_balance": {
+                "enabled": true,
+                "config": {
+                    "currency": "USD"
+                }
+            }
+        },
+        "schedule": {
+            "query_balance": "0 0 * * *"
+        }
+    });
+
+    let rejected_response = reqwest::Client::new()
+        .put(format!(
+            "{gateway_url}/api/admin/provider-ops/providers/provider-openai/config"
+        ))
+        .header(crate::constants::GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .json(&save_config_payload)
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(rejected_response.status(), StatusCode::BAD_REQUEST);
+    let rejected_payload: serde_json::Value = rejected_response
+        .json()
+        .await
+        .expect("json body should parse");
+    assert_eq!(
+        rejected_payload["detail"],
+        "query_balance.config.quota_divisor 必须是有限的正数"
+    );
+
+    save_config_payload["actions"]["query_balance"]["config"]["quota_divisor"] = json!("750000");
     let response = reqwest::Client::new()
         .put(format!(
             "{gateway_url}/api/admin/provider-ops/providers/provider-openai/config"
@@ -539,31 +589,7 @@ async fn gateway_saves_admin_provider_ops_config_locally_with_trusted_admin_prin
         .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
         .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
         .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
-        .json(&json!({
-            "architecture_id": "anyrouter",
-            "base_url": "https://ops.example",
-            "connector": {
-                "auth_type": "api_key",
-                "config": {
-                    "tenant": "acme"
-                },
-                "credentials": {
-                    "refresh_token": "************",
-                    "api_key": "live-secret-api-key",
-                }
-            },
-            "actions": {
-                "query_balance": {
-                    "enabled": true,
-                    "config": {
-                        "currency": "USD"
-                    }
-                }
-            },
-            "schedule": {
-                "query_balance": "0 0 * * *"
-            }
-        }))
+        .json(&save_config_payload)
         .send()
         .await
         .expect("request should succeed");
@@ -604,6 +630,10 @@ async fn gateway_saves_admin_provider_ops_config_locally_with_trusted_admin_prin
         .expect("connector should be object");
     assert_eq!(connector.get("auth_type"), Some(&json!("api_key")));
     assert_eq!(connector.get("config"), Some(&json!({"tenant": "acme"})));
+    assert_eq!(
+        provider_ops["actions"]["query_balance"]["config"]["quota_divisor"],
+        json!(750000.0)
+    );
     let credentials = connector
         .get("credentials")
         .and_then(serde_json::Value::as_object)
@@ -679,6 +709,14 @@ async fn gateway_deletes_admin_provider_ops_config_locally_with_trusted_admin_pr
                                     DEVELOPMENT_ENCRYPTION_KEY,
                                     "live-secret-api-key",
                                 ).expect("api key should encrypt"),
+                            }
+                        },
+                        "actions": {
+                            "query_balance": {
+                                "enabled": true,
+                                "config": {
+                                    "quota_divisor": 500000
+                                }
                             }
                         }
                     }
@@ -2745,6 +2783,14 @@ async fn gateway_handles_admin_provider_ops_balance_locally_with_trusted_admin_p
                                     "live-secret-api-key",
                                 ).expect("api key should encrypt"),
                             }
+                        },
+                        "actions": {
+                            "query_balance": {
+                                "enabled": true,
+                                "config": {
+                                    "quota_divisor": 500000
+                                }
+                            }
                         }
                     }
                 })),
@@ -2883,6 +2929,14 @@ async fn gateway_handles_admin_provider_ops_balance_locally_for_generic_api_prox
                                     DEVELOPMENT_ENCRYPTION_KEY,
                                     "live-secret-api-key",
                                 ).expect("api key should encrypt"),
+                            }
+                        },
+                        "actions": {
+                            "query_balance": {
+                                "enabled": true,
+                                "config": {
+                                    "quota_divisor": 500000
+                                }
                             }
                         }
                     }
@@ -3040,6 +3094,14 @@ async fn gateway_handles_admin_provider_ops_balance_locally_without_proxy_via_ex
                                     "live-secret-api-key",
                                 ).expect("api key should encrypt"),
                             }
+                        },
+                        "actions": {
+                            "query_balance": {
+                                "enabled": true,
+                                "config": {
+                                    "quota_divisor": 500000
+                                }
+                            }
                         }
                     }
                 })),
@@ -3168,6 +3230,14 @@ async fn gateway_handles_admin_provider_ops_checkin_locally_with_trusted_admin_p
                                     DEVELOPMENT_ENCRYPTION_KEY,
                                     "live-secret-api-key",
                                 ).expect("api key should encrypt"),
+                            }
+                        },
+                        "actions": {
+                            "query_balance": {
+                                "enabled": true,
+                                "config": {
+                                    "quota_divisor": 500000
+                                }
                             }
                         }
                     }
@@ -3503,6 +3573,14 @@ async fn gateway_handles_admin_provider_ops_batch_balance_locally_with_trusted_a
                                     "live-secret-api-key",
                                 ).expect("api key should encrypt"),
                             }
+                        },
+                        "actions": {
+                            "query_balance": {
+                                "enabled": true,
+                                "config": {
+                                    "quota_divisor": 500000
+                                }
+                            }
                         }
                     }
                 })),
@@ -3528,6 +3606,14 @@ async fn gateway_handles_admin_provider_ops_batch_balance_locally_with_trusted_a
                                     DEVELOPMENT_ENCRYPTION_KEY,
                                     "session=MTIzfGVIaDRlQUpwWkFOcGJuU3F1d0RfVkhsNWVYa0lkWE5sY201aGJXVUdjM1J5YVc1bkRCQUFCV0ZzYVdObHxzaWc",
                                 ).expect("session cookie should encrypt"),
+                            }
+                        },
+                        "actions": {
+                            "query_balance": {
+                                "enabled": true,
+                                "config": {
+                                    "quota_divisor": 500000
+                                }
                             }
                         }
                     }
@@ -3686,6 +3772,14 @@ async fn gateway_handles_admin_provider_ops_anyrouter_balance_with_auth_expired_
                                     "session=MTIzfGVIaDRlQUpwWkFOcGJuU3F1d0RfVkhsNWVYa0lkWE5sY201aGJXVUdjM1J5YVc1bkRCQUFCV0ZzYVdObHxzaWc",
                                 ).expect("session cookie should encrypt"),
                             }
+                        },
+                        "actions": {
+                            "query_balance": {
+                                "enabled": true,
+                                "config": {
+                                    "quota_divisor": 500000
+                                }
+                            }
                         }
                     }
                 })),
@@ -3798,6 +3892,14 @@ async fn gateway_handles_admin_provider_ops_balance_cache_refresh_modes_with_red
                                     DEVELOPMENT_ENCRYPTION_KEY,
                                     "live-secret-api-key",
                                 ).expect("api key should encrypt"),
+                            }
+                        },
+                        "actions": {
+                            "query_balance": {
+                                "enabled": true,
+                                "config": {
+                                    "quota_divisor": 500000
+                                }
                             }
                         }
                     }
@@ -3960,6 +4062,14 @@ async fn gateway_handles_admin_provider_ops_balance_cache_miss_without_refresh_r
                                     DEVELOPMENT_ENCRYPTION_KEY,
                                     "live-secret-api-key",
                                 ).expect("api key should encrypt"),
+                            }
+                        },
+                        "actions": {
+                            "query_balance": {
+                                "enabled": true,
+                                "config": {
+                                    "quota_divisor": 500000
+                                }
                             }
                         }
                     }
@@ -4124,6 +4234,14 @@ async fn gateway_clears_admin_provider_ops_balance_cache_after_config_save_with_
                                     "live-secret-api-key",
                                 ).expect("api key should encrypt"),
                             }
+                        },
+                        "actions": {
+                            "query_balance": {
+                                "enabled": true,
+                                "config": {
+                                    "quota_divisor": 500000
+                                }
+                            }
                         }
                     }
                 })),
@@ -4189,7 +4307,14 @@ async fn gateway_clears_admin_provider_ops_balance_cache_after_config_save_with_
                     "api_key": "next-secret-api-key"
                 }
             },
-            "actions": {},
+            "actions": {
+                "query_balance": {
+                    "enabled": true,
+                    "config": {
+                        "quota_divisor": 500000
+                    }
+                }
+            },
             "schedule": {}
         }))
         .send()
@@ -4524,6 +4649,14 @@ async fn gateway_handles_admin_provider_ops_batch_balance_with_pending_cache_hit
                                     DEVELOPMENT_ENCRYPTION_KEY,
                                     "live-secret-api-key",
                                 ).expect("api key should encrypt"),
+                            }
+                        },
+                        "actions": {
+                            "query_balance": {
+                                "enabled": true,
+                                "config": {
+                                    "quota_divisor": 500000
+                                }
                             }
                         }
                     }

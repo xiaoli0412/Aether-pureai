@@ -1976,6 +1976,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    state.configure_relay_engine();
+
     let background_tasks = if args.node_role.spawns_background_tasks() {
         Some(state.spawn_background_tasks())
     } else {

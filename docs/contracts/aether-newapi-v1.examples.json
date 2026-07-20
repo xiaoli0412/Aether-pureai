@@ -1,0 +1,200 @@
+{
+  "relay_context": {
+    "instance_id": "aether-primary",
+    "request_id": "req_01JZ8K2A9Y",
+    "subject_id": "u_92e80a75a7a0c43e",
+    "token_subject_id": "t_3bd45f66c11a949f",
+    "channel_id": "41",
+    "group": "default",
+    "model": "gpt-5",
+    "relay_format": "openai",
+    "config_revision": 7,
+    "expires_at": 1784073630
+  },
+  "relay_signature_vector": {
+    "signing_secret": "test-only-relay-secret",
+    "encoded_context": "eyJpbnN0YW5jZV9pZCI6ImFldGhlci1wcmltYXJ5IiwicmVxdWVzdF9pZCI6InJlcV8wMUpaOEsyQTlZIiwic3ViamVjdF9pZCI6InVfOTJlODBhNzVhN2EwYzQzZSIsInRva2VuX3N1YmplY3RfaWQiOiJ0XzNiZDQ1ZjY2YzExYTk0OWYiLCJjaGFubmVsX2lkIjoiNDEiLCJncm91cCI6ImRlZmF1bHQiLCJtb2RlbCI6ImdwdC01IiwicmVsYXlfZm9ybWF0Ijoib3BlbmFpIiwiY29uZmlnX3JldmlzaW9uIjo3LCJleHBpcmVzX2F0IjoxNzg0MDczNjMwfQ",
+    "signature_hex": "e641bfb3271fe91874b14433a27d4702f0be6c5bfc208b7dd5745dc3c013be46"
+  },
+  "service_signature_vector": {
+    "signing_secret": "test-only-control-secret",
+    "method": "GET",
+    "path": "/api/aether/v1/pricing",
+    "raw_query": "group=%E4%B8%AD%E6%96%87+pro&cursor=a%2Fb%3F",
+    "timestamp": "1784073600",
+    "nonce": "nonce-1234567890",
+    "canonical_payload": "GET\n/api/aether/v1/pricing\ngroup=%E4%B8%AD%E6%96%87+pro&cursor=a%2Fb%3F\n1784073600\nnonce-1234567890",
+    "signature_hex": "973cb68254605a00edad24e826ad54f9e822717b8e7a2cb4edb37a49cfd65e19"
+  },
+  "control_hmac_v2_signature_vector": {
+    "signing_secret": "test-only-control-secret-v2",
+    "method": "PUT",
+    "escaped_path": "/api/integrations/new-api/v1/instances/aether-primary",
+    "raw_query": "",
+    "instance_id": "aether-primary",
+    "timestamp": "1784073600",
+    "nonce": "nonce-control-v2-123456",
+    "raw_body": "{\"base_revision\":7,\"credential_rotation\":{\"id\":\"rotation_01JZ8K2A9Y\",\"control_secret\":\"test-only-control-secret-v3\",\"relay_signing_secret\":\"test-only-relay-secret-v3\",\"transition_expires_at\":1784077200,\"revoke_previous\":false}}",
+    "body_sha256": "ed3912c274f42d73d47de42f64632bc09cce1e430b97cc76294ff80f8103cb47",
+    "canonical_payload": "AETHER-CONTROL-V2\nPUT\n/api/integrations/new-api/v1/instances/aether-primary\n\naether-primary\n1784073600\nnonce-control-v2-123456\ned3912c274f42d73d47de42f64632bc09cce1e430b97cc76294ff80f8103cb47",
+    "signature_hex": "d6a3ca51c6aaaee2f0f960710c7e6fc431f7e3c219b6420816b5e1c6c3afd80f"
+  },
+  "events_response": {
+    "success": true,
+    "message": "",
+    "data": {
+      "contract_version": "aether-newapi-events/v1",
+      "events": [
+        {
+          "id": "101",
+          "instance_id": "aether-primary",
+          "dedupe_key": "usage:aether-primary:req_01JZ8K2A9Y",
+          "event_type": "usage_settled",
+          "occurred_at": 1784073600,
+          "created_at": 1784073601,
+          "quota_per_unit": "500000",
+          "payload": {
+            "request_id": "req_01JZ8K2A9Y",
+            "channel_id": "41",
+            "charged_quota": "1250",
+            "analysis_status": "settled"
+          }
+        }
+      ],
+      "next_cursor": "101",
+      "has_more": false
+    }
+  },
+  "pricing_response": {
+    "success": true,
+    "message": "",
+    "data": {
+      "contract_version": "v1",
+      "snapshot_revision": 17,
+      "quota_per_unit": "500000",
+      "upstream_group": "default",
+      "group_ratio": "1",
+      "pricing": {
+        "model_ratio": {
+          "gpt-5": "2.5"
+        }
+      },
+      "models": {
+        "gpt-5": {
+          "billing_mode": "ratio",
+          "charge_mode": "token_ratio",
+          "cost_estimation_status": "supported",
+          "model_ratio": "2.5",
+          "completion_ratio": "4"
+        }
+      },
+      "capabilities": {
+        "tiered_expr": {
+          "status": "requires_compatible_expression_engine",
+          "detail": "Exact evaluation requires billingexpr v1."
+        }
+      }
+    }
+  },
+  "snapshot_response": {
+    "success": true,
+    "message": "",
+    "data": {
+      "contract_version": "aether-newapi-snapshot/v1",
+      "snapshot_revision": 23,
+      "from": 1783987200,
+      "to": 1784073600,
+      "events": [],
+      "next_cursor": "101",
+      "has_more": false,
+      "quota_per_unit": "500000",
+      "historical_analysis_state": "unknown",
+      "usage": {
+        "requests": 0,
+        "charged_quota": "0"
+      },
+      "financial": {
+        "events": 0,
+        "quota_delta": "0",
+        "money_amount": "0"
+      },
+      "subscriptions": {
+        "changes": 0
+      },
+      "channels": [
+        {
+          "id": "41",
+          "balance": "12.5",
+          "used_quota": "1250"
+        }
+      ]
+    }
+  },
+  "capabilities": {
+    "supported_modes": ["direct_channel"],
+    "supported_formats": ["openai"],
+    "capability_version": "0.1.0",
+    "max_concurrent_requests": 10000,
+    "features": [
+      "relay_routing",
+      "price_discovery",
+      "credential_rotation_v1",
+      "control_hmac_v2"
+    ]
+  },
+  "instance_config": {
+    "instance_id": "aether-primary",
+    "route_profile": "balanced",
+    "execution_mode": "direct_channel",
+    "enabled": true,
+    "capability_version": "0.1.0",
+    "base_revision": 7,
+    "updated_at": "2026-07-15T05:00:00Z"
+  },
+  "instance_status_response": {
+    "instance_id": "aether-primary",
+    "healthy": true,
+    "last_sync_at": "2026-07-18T10:00:00Z",
+    "capability_version": "0.1.0",
+    "base_revision": 7,
+    "uptime_secs": 0,
+    "active_channels": 2,
+    "routing_mode": "direct_channel"
+  },
+  "credential_rotation_request": {
+    "id": "rotation_01JZ8K2A9Y",
+    "control_secret": "test-only-control-secret-v3",
+    "relay_signing_secret": "test-only-relay-secret-v3",
+    "transition_expires_at": 1784077200,
+    "revoke_previous": false
+  },
+  "credential_rotation_ack": {
+    "rotation_id": "rotation_01JZ8K2A9Y",
+    "credential_revision": 4,
+    "transition_expires_at": 1784077200,
+    "state": "applied"
+  },
+  "revision_conflict_response": {
+    "error": "revision conflict: expected 8, got 7",
+    "current_revision": 8,
+    "current_config": {
+      "instance_id": "aether-primary",
+      "route_profile": "balanced",
+      "execution_mode": "direct_channel",
+      "enabled": true,
+      "capability_version": "0.1.0",
+      "base_revision": 8,
+      "updated_at": "2026-07-18T10:00:00Z"
+    },
+    "diff": {
+      "route_profile": {
+        "requested": "cost-first",
+        "current": "balanced"
+      },
+      "enabled": {
+        "requested": false,
+        "current": true
+      }
+    }
+  }
+}

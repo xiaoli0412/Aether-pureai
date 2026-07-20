@@ -29,7 +29,7 @@ pub(super) fn spec() -> ProviderOpsArchitectureSpec {
             { "fields": ["base_url"] },
             { "fields": ["api_key"] }
         ],
-        "x-quota-divisor": 500000,
+        "x-quota-divisor": null,
         "x-validation": [
             {
                 "type": "required",
@@ -77,8 +77,7 @@ pub(super) fn spec() -> ProviderOpsArchitectureSpec {
                     "quota_divisor": {
                         "type": "number",
                         "title": "额度除数",
-                        "description": "将原始额度值转换为美元的除数",
-                        "default": 500000
+                        "description": "将原始额度值转换为美元的显式除数"
                     },
                     "currency": {
                         "type": "string",
@@ -86,7 +85,7 @@ pub(super) fn spec() -> ProviderOpsArchitectureSpec {
                         "default": "USD"
                     }
                 },
-                "required": []
+                "required": ["quota_divisor"]
             }),
         }],
         default_connector: Some("api_key"),

@@ -5,6 +5,30 @@ use super::{
     LOCAL_EXECUTION_RUNTIME_MISS_REASON_HEADER, TRACE_ID_HEADER,
 };
 
+const FALLBACK_TEST_STACK_BYTES: usize = 16 * 1024 * 1024;
+
+fn run_fallback_test<F, Fut>(test_name: &'static str, make_future: F)
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()> + 'static,
+{
+    let handle = std::thread::Builder::new()
+        .name(test_name.to_string())
+        .stack_size(FALLBACK_TEST_STACK_BYTES)
+        .spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("fallback test runtime should build")
+                .block_on(make_future());
+        })
+        .expect("fallback test thread should spawn");
+
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+
 #[tokio::test]
 async fn gateway_locally_denies_openai_chat_after_repeated_execution_runtime_misses_without_control_execute_opt_in(
 ) {
@@ -542,8 +566,18 @@ async fn gateway_locally_denies_openai_responses_after_execution_runtime_miss_wi
     .await;
 }
 
-#[tokio::test]
-async fn gateway_locally_denies_claude_messages_after_execution_runtime_miss_without_control_execute_opt_in(
+#[test]
+fn gateway_locally_denies_claude_messages_after_execution_runtime_miss_without_control_execute_opt_in(
+) {
+    run_fallback_test(
+        stringify!(
+            gateway_locally_denies_claude_messages_after_execution_runtime_miss_without_control_execute_opt_in
+        ),
+        gateway_locally_denies_claude_messages_after_execution_runtime_miss_without_control_execute_opt_in_impl,
+    );
+}
+
+async fn gateway_locally_denies_claude_messages_after_execution_runtime_miss_without_control_execute_opt_in_impl(
 ) {
     assert_ai_route_locally_denied_after_execution_runtime_miss(
         "/v1/messages",
@@ -698,8 +732,18 @@ async fn gateway_locally_denies_gemini_files_root_after_execution_runtime_miss_w
     .await;
 }
 
-#[tokio::test]
-async fn gateway_locally_denies_gemini_files_download_after_execution_runtime_miss_without_control_execute_opt_in(
+#[test]
+fn gateway_locally_denies_gemini_files_download_after_execution_runtime_miss_without_control_execute_opt_in(
+) {
+    run_fallback_test(
+        stringify!(
+            gateway_locally_denies_gemini_files_download_after_execution_runtime_miss_without_control_execute_opt_in
+        ),
+        gateway_locally_denies_gemini_files_download_after_execution_runtime_miss_without_control_execute_opt_in_impl,
+    );
+}
+
+async fn gateway_locally_denies_gemini_files_download_after_execution_runtime_miss_without_control_execute_opt_in_impl(
 ) {
     assert_ai_route_locally_denied_after_execution_runtime_miss_with_request(
         reqwest::Method::GET,

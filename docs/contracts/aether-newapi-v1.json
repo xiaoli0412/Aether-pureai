@@ -1,0 +1,122 @@
+{
+  "contract_version": "aether-newapi/v1",
+  "schema_revision": 4,
+  "json_schema": "aether-newapi-v1.schema.json",
+  "examples": "aether-newapi-v1.examples.json",
+  "bundle_sha256": "f26b9a014e66c8715372d0d41c166b2782bca54c64ffacad933b00c73b12a168",
+  "relay_headers": [
+    "X-Aether-Instance-ID",
+    "X-Aether-Relay-Context",
+    "X-Aether-Relay-Signature"
+  ],
+  "service_headers": [
+    "X-Aether-Instance-ID",
+    "X-Aether-Signature-Version",
+    "X-Aether-Timestamp",
+    "X-Aether-Nonce",
+    "X-Aether-Body-SHA256",
+    "X-Aether-Signature"
+  ],
+  "control_hmac_v2": {
+    "signature_version": "v2",
+    "canonical_payload": "AETHER-CONTROL-V2\n{METHOD}\n{ESCAPED_PATH}\n{RAW_QUERY}\n{INSTANCE_ID}\n{TIMESTAMP}\n{NONCE}\n{BODY_SHA256_LOWER_HEX}",
+    "body_sha256": "lowercase-hex-sha256-over-exact-raw-http-body",
+    "legacy_bearer": "permitted only for non-rotation compatibility requests; incomplete or invalid v2 headers must not fall back"
+  },
+  "revision_conflict": {
+    "http_status": 409,
+    "response_schema": "revision_conflict_response",
+    "current_config_field": "current_config",
+    "diff_entry_fields": [
+      "requested",
+      "current"
+    ]
+  },
+  "instance_status": {
+    "response_schema": "instance_status_response",
+    "healthy_semantics": "control_execution_readiness_not_upstream_sla",
+    "fields": [
+      "instance_id",
+      "healthy",
+      "last_sync_at",
+      "capability_version",
+      "base_revision",
+      "uptime_secs",
+      "active_channels",
+      "routing_mode"
+    ],
+    "last_sync_at_semantics": "persisted_config_updated_at_rfc3339_or_null",
+    "uptime_secs_semantics": "zero_until_a_durable_uptime_source_exists",
+    "config_store_unavailable_http_status": 503,
+    "routing_mode_values": [
+      "direct_channel",
+      "disabled",
+      "parallel_shadow",
+      "aether_decision"
+    ]
+  },
+  "field_formats": {
+    "ids": "decimal-or-opaque-string",
+    "revision": "non-negative-json-integer",
+    "decimal": "base-10-string",
+    "timestamp": "unix-seconds-json-integer",
+    "cursor": "opaque-string"
+  },
+  "relay_context": {
+    "encoding": "base64url-no-padding-json",
+    "signature": "hmac-sha256-hex-over-encoded-context",
+    "max_age_seconds": 30,
+    "required_fields": [
+      "instance_id",
+      "request_id",
+      "subject_id",
+      "token_subject_id",
+      "channel_id",
+      "group",
+      "model",
+      "relay_format",
+      "config_revision",
+      "expires_at"
+    ],
+    "forbidden_fields": [
+      "api_key",
+      "user_name",
+      "email",
+      "payment_credentials",
+      "balance"
+    ]
+  },
+  "events_contract_version": "aether-newapi-events/v1",
+  "events_envelope": {
+    "success": "boolean",
+    "message": "string",
+    "data": {
+      "contract_version": "string",
+      "events": "array",
+      "next_cursor": "string",
+      "has_more": "boolean"
+    }
+  },
+  "new_api_endpoints": [
+    "/api/aether/v1/pricing",
+    "/api/aether/v1/events",
+    "/api/aether/v1/snapshot"
+  ],
+  "aether_endpoints": [
+    "/api/integrations/new-api/v1/capabilities",
+    "/api/integrations/new-api/v1/instances/{id}",
+    "/api/integrations/new-api/v1/instances/{id}/status",
+    "/api/export/pricing",
+    "/api/export/usage-summary",
+    "/api/export/events"
+  ],
+  "active_modes": [
+    "direct_channel"
+  ],
+  "reserved_modes": [
+    "parallel_shadow",
+    "aether_decision"
+  ],
+  "financial_authority": "new_api",
+  "automatic_price_writeback": false
+}

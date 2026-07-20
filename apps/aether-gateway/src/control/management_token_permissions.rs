@@ -143,6 +143,11 @@ const PERMISSION_GROUPS: &[PermissionGroup] = &[
         assignable: true,
     },
     PermissionGroup {
+        scope: "relay",
+        label: "Relay 管理",
+        assignable: true,
+    },
+    PermissionGroup {
         scope: "security",
         label: "安全",
         assignable: true,
@@ -454,6 +459,9 @@ fn permission_key(scope: &str, access: &str) -> &'static str {
         ("routing_profiles", "read") => "admin:routing_profiles:read",
         ("routing_profiles", "write") => "admin:routing_profiles:write",
         ("routing_profiles", "admin") => "admin:routing_profiles:admin",
+        ("relay", "read") => "admin:relay:read",
+        ("relay", "write") => "admin:relay:write",
+        ("relay", "admin") => "admin:relay:admin",
         ("security", "read") => "admin:security:read",
         ("security", "write") => "admin:security:write",
         ("security", "admin") => "admin:security:admin",
@@ -533,6 +541,7 @@ mod tests {
             "provider_strategy",
             "providers",
             "proxy_nodes",
+            "relay",
             "security",
             "stats",
             "system",
@@ -590,6 +599,7 @@ mod tests {
                 "route/admin/operations_families.rs",
                 include_str!("route/admin/operations_families.rs"),
             ),
+            ("route/relay.rs", include_str!("route/relay.rs")),
             (
                 "route/admin/provider_ops_routes.rs",
                 include_str!("route/admin/provider_ops_routes.rs"),
@@ -663,6 +673,49 @@ mod tests {
             .required_permission,
             "admin:providers:write"
         );
+    }
+
+    #[test]
+    fn relay_permissions_are_assignable_and_enforce_read_write_admin_levels() {
+        for access in ["read", "write", "admin"] {
+            assert!(
+                is_assignable_management_token_permission(&format!("admin:relay:{access}")),
+                "relay permission {access} should be assignable"
+            );
+        }
+
+        let decision = GatewayControlDecision::synthetic(
+            "/api/relay/dashboard".to_string(),
+            Some("admin_proxy".to_string()),
+            Some("relay_manage".to_string()),
+            Some("get_dashboard".to_string()),
+            Some("admin:relay".to_string()),
+        );
+        let read = vec!["admin:relay:read".to_string()];
+        assert!(validate_management_token_admin_route_permission(
+            &http::Method::GET,
+            &decision,
+            Some(&read),
+        )
+        .is_ok());
+        assert_eq!(
+            validate_management_token_admin_route_permission(
+                &http::Method::POST,
+                &decision,
+                Some(&read),
+            )
+            .expect_err("relay read permission should reject writes")
+            .required_permission,
+            "admin:relay:write"
+        );
+
+        let admin = vec!["admin:relay:admin".to_string()];
+        assert!(validate_management_token_admin_route_permission(
+            &http::Method::POST,
+            &decision,
+            Some(&admin),
+        )
+        .is_ok());
     }
 
     #[test]

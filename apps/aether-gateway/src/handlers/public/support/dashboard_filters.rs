@@ -1,19 +1,20 @@
 use super::super::support_wallet::build_wallet_balance_payload_for_user;
 use super::{
-    build_auth_error_response, query_param_value, resolve_authenticated_local_user, AppState,
-    GatewayError, GatewayPublicRequestContext,
+    AppState, GatewayError, GatewayPublicRequestContext, build_auth_error_response,
+    query_param_value, resolve_authenticated_local_user,
 };
+use aether_billing::normalize_input_tokens_for_billing;
 use aether_data_contracts::repository::usage::{
-    StoredUsageCostSavingsSummary, StoredUsageDashboardDailyBreakdownRow,
+    StoredRequestUsageAudit, StoredUsageCostSavingsSummary, StoredUsageDashboardDailyBreakdownRow,
     StoredUsageDashboardSummary, UsageAuditAggregationGroupBy, UsageAuditAggregationQuery,
     UsageCostSavingsSummaryQuery, UsageDashboardDailyBreakdownQuery,
     UsageDashboardProviderCountsQuery, UsageDashboardSummaryQuery,
 };
 use axum::{
+    Json,
     body::Body,
     http,
     response::{IntoResponse, Response},
-    Json,
 };
 use chrono::Datelike;
 use serde_json::json;
@@ -247,6 +248,35 @@ fn dashboard_today_token_value_from_subvalue(totals: &DashboardUsageTotals) -> u
         .saturating_add(totals.output_tokens)
         .saturating_add(totals.cache_creation_tokens)
         .saturating_add(totals.cache_read_tokens)
+}
+
+fn dashboard_recent_request_cache_creation_tokens(item: &StoredRequestUsageAudit) -> u64 {
+    let classified = item
+        .cache_creation_ephemeral_5m_input_tokens
+        .saturating_add(item.cache_creation_ephemeral_1h_input_tokens);
+    if item.cache_creation_input_tokens == 0 && classified > 0 {
+        classified
+    } else {
+        item.cache_creation_input_tokens
+    }
+}
+
+fn dashboard_recent_request_effective_input_tokens(item: &StoredRequestUsageAudit) -> u64 {
+    let api_format = item
+        .endpoint_api_format
+        .as_deref()
+        .or(item.api_format.as_deref());
+    let input_tokens = i64::try_from(item.input_tokens).unwrap_or(i64::MAX);
+    let cache_read_tokens = i64::try_from(item.cache_read_input_tokens).unwrap_or(i64::MAX);
+
+    normalize_input_tokens_for_billing(api_format, input_tokens, 0, cache_read_tokens) as u64
+}
+
+fn dashboard_recent_request_total_tokens(item: &StoredRequestUsageAudit) -> u64 {
+    dashboard_recent_request_effective_input_tokens(item)
+        .saturating_add(item.output_tokens)
+        .saturating_add(dashboard_recent_request_cache_creation_tokens(item))
+        .saturating_add(item.cache_read_input_tokens)
 }
 
 fn dashboard_parse_tz_offset_minutes(query: Option<&str>) -> Result<i32, String> {
@@ -1373,7 +1403,7 @@ pub(super) async fn handle_dashboard_recent_requests_get(
                 "id": item.id,
                 "user": username,
                 "model": dashboard_non_empty_value(&item.model, "N/A"),
-                "tokens": item.total_tokens,
+                "tokens": dashboard_recent_request_total_tokens(&item),
                 "time": dashboard_format_time_hhmm(item.created_at_unix_ms),
                 "is_stream": item.is_stream,
             })

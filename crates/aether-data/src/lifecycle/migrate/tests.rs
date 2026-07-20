@@ -17,6 +17,18 @@ use crate::lifecycle::bootstrap::postgres::{
     snapshot_migrations as empty_database_snapshot_migrations, EMPTY_DATABASE_SNAPSHOT_SQL,
 };
 
+const POST_SNAPSHOT_RELAY_MIGRATION_VERSIONS: &[i64] = &[
+    20260714000000,
+    20260715000000,
+    20260715010000,
+    20260717000000,
+    20260718010000,
+    20260719000000,
+    20260720000000,
+];
+const MYSQL_RELAY_EVENT_BINARY_IDENTITY_MIGRATION_VERSION: i64 = 20260718000000;
+const RELAY_PROFIT_REPLAY_DEAD_LETTER_MIGRATION_VERSION: i64 = 20260718010000;
+
 #[derive(Debug)]
 struct ManagedPostgresServer {
     child: Option<Child>,
@@ -732,6 +744,15 @@ fn mysql_and_sqlite_migrations_include_enabled_incrementals() {
             20260527000000,
             20260528000000,
             20260528020000,
+            20260714000000,
+            20260715000000,
+            20260715010000,
+            20260716000000,
+            20260717000000,
+            20260718000000,
+            20260718010000,
+            20260719000000,
+            20260720000000,
         ]
     );
     assert_eq!(
@@ -759,8 +780,116 @@ fn mysql_and_sqlite_migrations_include_enabled_incrementals() {
             20260527000000,
             20260528000000,
             20260528020000,
+            20260714000000,
+            20260715000000,
+            20260715010000,
+            20260717000000,
+            20260718010000,
+            20260719000000,
+            20260720000000,
         ]
     );
+}
+
+#[test]
+fn mysql_relay_event_identity_migration_uses_binary_protocol_keys() {
+    let migration = super::mysql::MIGRATOR
+        .iter()
+        .find(|migration| migration.version == MYSQL_RELAY_EVENT_BINARY_IDENTITY_MIGRATION_VERSION)
+        .expect("mysql relay event identity migration should be embedded");
+    let source = migration.sql.as_ref();
+
+    for required_clause in [
+        "ALTER TABLE relay_event_inbox",
+        "MODIFY instance_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL",
+        "MODIFY event_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL",
+        "ALTER TABLE relay_event_cursors",
+        "ALTER TABLE relay_event_outbox",
+    ] {
+        assert!(
+            source.contains(required_clause),
+            "mysql relay event identity migration must contain {required_clause:?}"
+        );
+    }
+}
+
+#[test]
+fn relay_profit_replay_migrations_keep_the_same_durable_contract_across_backends() {
+    let postgres = POSTGRES_MIGRATOR
+        .iter()
+        .find(|migration| migration.version == 20260717000000)
+        .expect("postgres relay profit replay migration should be embedded")
+        .sql
+        .as_ref();
+    let mysql = super::mysql::MIGRATOR
+        .iter()
+        .find(|migration| migration.version == 20260717000000)
+        .expect("mysql relay profit replay migration should be embedded")
+        .sql
+        .as_ref();
+    let sqlite = super::sqlite::MIGRATOR
+        .iter()
+        .find(|migration| migration.version == 20260717000000)
+        .expect("sqlite relay profit replay migration should be embedded")
+        .sql
+        .as_ref();
+
+    for (backend, source) in [("postgres", postgres), ("mysql", mysql), ("sqlite", sqlite)] {
+        for required_clause in [
+            "ALTER TABLE relay_event_inbox",
+            "ADD COLUMN profit_status",
+            "NOT NULL DEFAULT 'pending'",
+            "CHECK (profit_status IN ('pending', 'recorded'))",
+            "UPDATE relay_event_inbox",
+            "WHEN event_type = 'usage_settled' THEN 'pending'",
+            "ELSE 'recorded'",
+            "CREATE INDEX idx_relay_event_inbox_pending_profit",
+        ] {
+            assert!(
+                source.contains(required_clause),
+                "{backend} relay profit replay migration must contain {required_clause:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn relay_profit_replay_dead_letter_migrations_keep_the_same_durable_contract_across_backends() {
+    let postgres = POSTGRES_MIGRATOR
+        .iter()
+        .find(|migration| migration.version == RELAY_PROFIT_REPLAY_DEAD_LETTER_MIGRATION_VERSION)
+        .expect("postgres relay profit replay dead-letter migration should be embedded")
+        .sql
+        .as_ref();
+    let mysql = super::mysql::MIGRATOR
+        .iter()
+        .find(|migration| migration.version == RELAY_PROFIT_REPLAY_DEAD_LETTER_MIGRATION_VERSION)
+        .expect("mysql relay profit replay dead-letter migration should be embedded")
+        .sql
+        .as_ref();
+    let sqlite = super::sqlite::MIGRATOR
+        .iter()
+        .find(|migration| migration.version == RELAY_PROFIT_REPLAY_DEAD_LETTER_MIGRATION_VERSION)
+        .expect("sqlite relay profit replay dead-letter migration should be embedded")
+        .sql
+        .as_ref();
+
+    for (backend, source) in [("postgres", postgres), ("mysql", mysql), ("sqlite", sqlite)] {
+        for required_clause in [
+            "ALTER TABLE relay_event_inbox",
+            "ADD COLUMN profit_replay_state",
+            "NOT NULL DEFAULT 'eligible'",
+            "CHECK (profit_replay_state IN ('eligible', 'invalid'))",
+            "ADD COLUMN profit_replay_error",
+            "DROP INDEX idx_relay_event_inbox_pending_profit",
+            "CREATE INDEX idx_relay_event_inbox_pending_profit",
+        ] {
+            assert!(
+                source.contains(required_clause),
+                "{backend} relay profit replay dead-letter migration must contain {required_clause:?}"
+            );
+        }
+    }
 }
 
 #[tokio::test]
@@ -1564,12 +1693,20 @@ fn pending_migrations_from_applied_skips_versions_already_applied() {
             20260528000000,
             20260528010000,
             20260528020000,
+            20260714000000,
+            20260715000000,
+            20260715010000,
+            20260717000000,
+            20260718010000,
+            20260719000000,
+            20260720000000,
         ]
     );
 }
 
 #[test]
-fn pending_migrations_from_applied_is_empty_after_empty_database_snapshot_stamp() {
+fn pending_migrations_from_applied_includes_relay_incrementals_after_empty_database_snapshot_stamp()
+{
     let applied = empty_database_snapshot_migrations(&POSTGRES_MIGRATOR)
         .expect("empty database snapshot migrations should resolve")
         .into_iter()
@@ -1579,12 +1716,16 @@ fn pending_migrations_from_applied_is_empty_after_empty_database_snapshot_stamp(
         })
         .collect::<Vec<_>>();
 
-    let pending = pending_migrations_from_applied(&applied);
+    let pending_versions = pending_migrations_from_applied(&applied)
+        .into_iter()
+        .map(|migration| migration.version)
+        .collect::<Vec<_>>();
 
-    assert!(
-            pending.is_empty(),
-            "empty database snapshot-stamped databases should not require a manual migration before first startup"
-        );
+    assert_eq!(
+        pending_versions,
+        POST_SNAPSHOT_RELAY_MIGRATION_VERSIONS.to_vec(),
+        "fresh snapshot-stamped databases should apply relay incrementals after the snapshot cutoff"
+    );
 }
 
 #[tokio::test]
@@ -1640,6 +1781,13 @@ async fn sqlite_migrations_create_core_config_tables() {
         "refund_requests",
         "redeem_code_batches",
         "redeem_codes",
+        "relay_profit_ledger",
+        "relay_event_inbox",
+        "relay_event_outbox",
+        "relay_event_cursors",
+        "relay_downstream_groups",
+        "new_api_integration_configs",
+        "new_api_integration_credentials",
     ] {
         let exists: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?",
@@ -1650,6 +1798,84 @@ async fn sqlite_migrations_create_core_config_tables() {
         .expect("sqlite_master query should succeed");
         assert_eq!(exists, 1, "missing sqlite table {table_name}");
     }
+
+    let credential_columns: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM pragma_table_info('new_api_integration_credentials') ORDER BY cid",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("sqlite credential columns should load");
+    assert_eq!(
+        credential_columns,
+        vec![
+            "instance_id".to_string(),
+            "current_control_secret_ciphertext".to_string(),
+            "previous_control_secret_ciphertext".to_string(),
+            "current_relay_secret_ciphertext".to_string(),
+            "previous_relay_secret_ciphertext".to_string(),
+            "transition_expires_at_unix_ms".to_string(),
+            "rotation_id".to_string(),
+            "last_rotation_payload_sha256".to_string(),
+            "credential_revision".to_string(),
+            "updated_at_unix_ms".to_string(),
+        ],
+        "credential persistence must expose only opaque ciphertext secret columns",
+    );
+
+    let relay_profit_columns: Vec<(String, String, i64)> = sqlx::query_as(
+        r#"
+SELECT name, type, "notnull"
+FROM pragma_table_info('relay_profit_ledger')
+WHERE name IN (
+    'charged_quota',
+    'quota_per_unit',
+    'cost_confidence',
+    'downstream_revenue_usd',
+    'instance_id',
+    'occurred_at_unix_ms',
+    'payment_fee_usd',
+    'upstream_cost_usd',
+    'net_profit_usd',
+    'margin_percent'
+)
+ORDER BY name
+"#,
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("sqlite relay profit ledger columns should load");
+    assert_eq!(
+        relay_profit_columns,
+        vec![
+            ("charged_quota".to_string(), "TEXT".to_string(), 1),
+            ("cost_confidence".to_string(), "TEXT".to_string(), 1),
+            ("downstream_revenue_usd".to_string(), "REAL".to_string(), 0),
+            ("instance_id".to_string(), "TEXT".to_string(), 1),
+            ("margin_percent".to_string(), "REAL".to_string(), 0),
+            ("net_profit_usd".to_string(), "REAL".to_string(), 0),
+            ("occurred_at_unix_ms".to_string(), "INTEGER".to_string(), 1),
+            ("payment_fee_usd".to_string(), "REAL".to_string(), 0),
+            ("quota_per_unit".to_string(), "TEXT".to_string(), 0),
+            ("upstream_cost_usd".to_string(), "REAL".to_string(), 0),
+        ]
+    );
+
+    let relay_profit_request_scope: Vec<String> = sqlx::query_scalar(
+        r#"
+SELECT index_column.name
+FROM pragma_index_list('relay_profit_ledger') AS index_list
+JOIN pragma_index_info(index_list.name) AS index_column
+WHERE index_list.origin = 'u'
+ORDER BY index_column.seqno
+"#,
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("sqlite relay profit request scope should load");
+    assert_eq!(
+        relay_profit_request_scope,
+        vec!["instance_id".to_string(), "request_id".to_string()]
+    );
 
     let total_adjusted_exists: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM pragma_table_info('wallets') WHERE name = ?")
@@ -1721,6 +1947,13 @@ async fn postgres_migrations_create_core_config_tables_when_url_is_set() {
         "refund_requests",
         "redeem_code_batches",
         "redeem_codes",
+        "relay_profit_ledger",
+        "relay_event_inbox",
+        "relay_event_outbox",
+        "relay_event_cursors",
+        "relay_downstream_groups",
+        "new_api_integration_configs",
+        "new_api_integration_credentials",
     ] {
         let exists: i64 = query_scalar(
             r#"
@@ -1736,6 +1969,62 @@ WHERE table_schema = 'public'
         .expect("postgres information_schema query should succeed");
         assert_eq!(exists, 1, "missing postgres table {table_name}");
     }
+
+    let relay_inbox_marker: (String, Option<String>) = sqlx::query_as(
+        r#"
+SELECT data_type, column_default
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND table_name = 'relay_event_inbox'
+  AND column_name = 'profit_status'
+"#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("postgres relay inbox marker column should load");
+    assert_eq!(relay_inbox_marker.0, "text");
+    assert!(
+        relay_inbox_marker
+            .1
+            .as_deref()
+            .is_some_and(|default| default.contains("pending")),
+        "postgres relay inbox marker should default to pending"
+    );
+
+    let relay_inbox_replay_state: (String, Option<String>) = sqlx::query_as(
+        r#"
+SELECT data_type, column_default
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND table_name = 'relay_event_inbox'
+  AND column_name = 'profit_replay_state'
+"#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("postgres relay inbox replay state column should load");
+    assert_eq!(relay_inbox_replay_state.0, "text");
+    assert!(
+        relay_inbox_replay_state
+            .1
+            .as_deref()
+            .is_some_and(|default| default.contains("eligible")),
+        "postgres relay inbox replay state should default to eligible"
+    );
+
+    let relay_inbox_replay_error_type: String = query_scalar(
+        r#"
+SELECT data_type
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND table_name = 'relay_event_inbox'
+  AND column_name = 'profit_replay_error'
+"#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("postgres relay inbox replay error column should load");
+    assert_eq!(relay_inbox_replay_error_type, "text");
 
     let total_adjusted_exists: i64 = query_scalar(
         r#"
@@ -1810,6 +2099,13 @@ async fn mysql_migrations_create_core_config_tables_when_url_is_set() {
         "refund_requests",
         "redeem_code_batches",
         "redeem_codes",
+        "relay_profit_ledger",
+        "relay_event_inbox",
+        "relay_event_outbox",
+        "relay_event_cursors",
+        "relay_downstream_groups",
+        "new_api_integration_configs",
+        "new_api_integration_credentials",
     ] {
         let exists: i64 = sqlx::query_scalar(
             r#"
@@ -1824,6 +2120,79 @@ WHERE table_schema = DATABASE()
         .await
         .expect("mysql information_schema query should succeed");
         assert_eq!(exists, 1, "missing mysql table {table_name}");
+    }
+
+    let relay_inbox_marker: (String, Option<String>) = sqlx::query_as(
+        r#"
+SELECT data_type, column_default
+FROM information_schema.columns
+WHERE table_schema = DATABASE()
+  AND table_name = 'relay_event_inbox'
+  AND column_name = 'profit_status'
+"#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("mysql relay inbox marker column should load");
+    assert_eq!(relay_inbox_marker.0, "varchar");
+    assert_eq!(relay_inbox_marker.1.as_deref(), Some("pending"));
+
+    let relay_inbox_replay_state: (String, Option<String>) = sqlx::query_as(
+        r#"
+SELECT data_type, column_default
+FROM information_schema.columns
+WHERE table_schema = DATABASE()
+  AND table_name = 'relay_event_inbox'
+  AND column_name = 'profit_replay_state'
+"#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("mysql relay inbox replay state column should load");
+    assert_eq!(relay_inbox_replay_state.0, "varchar");
+    assert_eq!(relay_inbox_replay_state.1.as_deref(), Some("eligible"));
+
+    let relay_inbox_replay_error: (String, Option<String>) = sqlx::query_as(
+        r#"
+SELECT data_type, column_default
+FROM information_schema.columns
+WHERE table_schema = DATABASE()
+  AND table_name = 'relay_event_inbox'
+  AND column_name = 'profit_replay_error'
+"#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("mysql relay inbox replay error column should load");
+    assert_eq!(relay_inbox_replay_error.0, "text");
+    assert_eq!(relay_inbox_replay_error.1, None);
+
+    let relay_identity_collations: Vec<(String, String, Option<String>)> = sqlx::query_as(
+        r#"
+SELECT table_name, column_name, collation_name
+FROM information_schema.columns
+WHERE table_schema = DATABASE()
+  AND (
+      (table_name = 'relay_event_inbox' AND column_name IN ('instance_id', 'event_id'))
+      OR (table_name = 'relay_event_cursors' AND column_name = 'instance_id')
+      OR (table_name = 'relay_event_outbox' AND column_name IN ('instance_id', 'event_id'))
+  )
+"#,
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("mysql relay identity collations should load");
+    assert_eq!(
+        relay_identity_collations.len(),
+        5,
+        "mysql must expose every inbox, cursor, and outbox identity column"
+    );
+    for (table_name, column_name, collation_name) in relay_identity_collations {
+        assert_eq!(
+            collation_name.as_deref(),
+            Some("utf8mb4_bin"),
+            "mysql relay identity {table_name}.{column_name} must be binary"
+        );
     }
 
     let total_adjusted_exists: i64 = sqlx::query_scalar(
@@ -1877,9 +2246,13 @@ async fn prepare_database_for_startup_bootstraps_clean_database() {
         .await
         .expect("clean database bootstrap should succeed");
 
-    assert!(
-        pending.is_empty(),
-        "fresh databases should not report pending migrations after startup preparation"
+    assert_eq!(
+        pending
+            .into_iter()
+            .map(|migration| migration.version)
+            .collect::<Vec<_>>(),
+        POST_SNAPSHOT_RELAY_MIGRATION_VERSIONS.to_vec(),
+        "fresh snapshots should report relay migrations introduced after the snapshot cutoff"
     );
     assert!(table_exists(&pool, "users")
         .await
@@ -1912,6 +2285,17 @@ async fn prepare_database_for_startup_bootstraps_clean_database() {
             .expect("baseline migrations should resolve")
             .len() as i64
     );
+
+    super::run_migrations(&pool)
+        .await
+        .expect("post-snapshot relay migrations should run");
+    assert!(
+        super::pending_migrations(&pool)
+            .await
+            .expect("pending postgres migrations should load after relay migration")
+            .is_empty(),
+        "the startup migration runner should apply the relay incrementals"
+    );
 }
 
 #[tokio::test]
@@ -1935,9 +2319,13 @@ async fn prepare_database_for_startup_bootstraps_when_only_unrelated_public_tabl
         .await
         .expect("startup preparation should tolerate unrelated public tables");
 
-    assert!(
-        pending.is_empty(),
-        "unrelated public tables should not block baseline bootstrap on first startup"
+    assert_eq!(
+        pending
+            .into_iter()
+            .map(|migration| migration.version)
+            .collect::<Vec<_>>(),
+        POST_SNAPSHOT_RELAY_MIGRATION_VERSIONS.to_vec(),
+        "unrelated public tables should still bootstrap the snapshot and expose relay incrementals"
     );
     assert!(table_exists(&pool, "vendor_bootstrap_marker")
         .await
@@ -1945,4 +2333,206 @@ async fn prepare_database_for_startup_bootstraps_when_only_unrelated_public_tabl
     assert!(table_exists(&pool, "oauth_providers")
         .await
         .expect("oauth_providers lookup should succeed"));
+}
+
+#[tokio::test]
+async fn sqlite_relay_event_inbox_persists_a_profit_replay_marker() {
+    let pool = SqlitePool::connect("sqlite::memory:")
+        .await
+        .expect("sqlite in-memory pool should connect");
+
+    super::run_sqlite_migrations(&pool)
+        .await
+        .expect("sqlite migrations should run");
+
+    let marker_column: Vec<(String, String, i64)> = sqlx::query_as(
+        r#"
+SELECT name, type, "notnull"
+FROM pragma_table_info('relay_event_inbox')
+WHERE name = 'profit_status'
+"#,
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("relay inbox columns should load");
+    assert_eq!(
+        marker_column,
+        vec![("profit_status".to_string(), "TEXT".to_string(), 1)],
+        "the relay inbox needs a durable non-null profit replay marker"
+    );
+
+    let replay_columns: Vec<(String, String, i64)> = sqlx::query_as(
+        r#"
+SELECT name, type, "notnull"
+FROM pragma_table_info('relay_event_inbox')
+WHERE name IN ('profit_replay_state', 'profit_replay_error')
+ORDER BY name
+"#,
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("relay inbox replay state columns should load");
+    assert_eq!(
+        replay_columns,
+        vec![
+            ("profit_replay_error".to_string(), "TEXT".to_string(), 0),
+            ("profit_replay_state".to_string(), "TEXT".to_string(), 1),
+        ],
+        "the relay inbox must retain a durable dead-letter state and diagnostic"
+    );
+
+    sqlx::query(
+        "INSERT INTO relay_event_inbox
+         (instance_id, event_id, event_type, payload_json, quota_per_unit, occurred_at, source_created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind("aether-primary")
+    .bind("usage-event-1")
+    .bind("usage_settled")
+    .bind("{}")
+    .bind("500000")
+    .bind(1_784_073_600_i64)
+    .bind(1_784_073_601_i64)
+    .execute(&pool)
+    .await
+    .expect("relay inbox fixture should insert");
+
+    let initial_status: String = sqlx::query_scalar(
+        "SELECT profit_status FROM relay_event_inbox WHERE instance_id = ? AND event_id = ?",
+    )
+    .bind("aether-primary")
+    .bind("usage-event-1")
+    .fetch_one(&pool)
+    .await
+    .expect("relay inbox marker should load");
+    assert_eq!(initial_status, "pending");
+
+    let initial_replay_state: (String, Option<String>) = sqlx::query_as(
+        "SELECT profit_replay_state, profit_replay_error
+         FROM relay_event_inbox WHERE instance_id = ? AND event_id = ?",
+    )
+    .bind("aether-primary")
+    .bind("usage-event-1")
+    .fetch_one(&pool)
+    .await
+    .expect("relay inbox replay state should load");
+    assert_eq!(initial_replay_state, ("eligible".to_string(), None));
+
+    sqlx::query(
+        "UPDATE relay_event_inbox
+         SET profit_status = 'recorded'
+         WHERE instance_id = ? AND event_id = ?",
+    )
+    .bind("aether-primary")
+    .bind("usage-event-1")
+    .execute(&pool)
+    .await
+    .expect("relay inbox marker should become recorded after a durable profit append");
+
+    let recorded_status: String = sqlx::query_scalar(
+        "SELECT profit_status FROM relay_event_inbox WHERE instance_id = ? AND event_id = ?",
+    )
+    .bind("aether-primary")
+    .bind("usage-event-1")
+    .fetch_one(&pool)
+    .await
+    .expect("recorded relay inbox marker should load");
+    assert_eq!(recorded_status, "recorded");
+}
+
+#[tokio::test]
+async fn sqlite_relay_profit_replay_migration_backfills_existing_inbox_rows() {
+    let pool = SqlitePool::connect("sqlite::memory:")
+        .await
+        .expect("sqlite in-memory pool should connect");
+
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/sqlite/20260714000000_add_relay_engine_tables.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("pre-marker relay schema should apply");
+    for (event_id, event_type) in [
+        ("usage-before-marker", "usage_settled"),
+        ("financial-before-marker", "financial_posted"),
+    ] {
+        sqlx::query(
+            "INSERT INTO relay_event_inbox
+             (instance_id, event_id, event_type, payload_json, quota_per_unit, occurred_at, source_created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind("aether-primary")
+        .bind(event_id)
+        .bind(event_type)
+        .bind("{}")
+        .bind("500000")
+        .bind(1_784_073_600_i64)
+        .bind(1_784_073_601_i64)
+        .execute(&pool)
+        .await
+        .expect("pre-marker relay inbox fixture should insert");
+    }
+
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/sqlite/20260717000000_add_relay_event_inbox_profit_replay_status.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("profit replay marker migration should apply to existing inbox rows");
+
+    let statuses: Vec<(String, String)> = sqlx::query_as(
+        "SELECT event_id, profit_status
+         FROM relay_event_inbox
+         WHERE instance_id = ?
+         ORDER BY event_id",
+    )
+    .bind("aether-primary")
+    .fetch_all(&pool)
+    .await
+    .expect("backfilled relay inbox statuses should load");
+    assert_eq!(
+        statuses,
+        vec![
+            (
+                "financial-before-marker".to_string(),
+                "recorded".to_string()
+            ),
+            ("usage-before-marker".to_string(), "pending".to_string()),
+        ],
+        "existing usage settlements must replay while unrelated events are already complete"
+    );
+
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/sqlite/20260718010000_add_relay_event_inbox_profit_replay_dead_letter.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("dead-letter replay migration should apply after the profit marker migration");
+
+    let replay_states: Vec<(String, String, Option<String>)> = sqlx::query_as(
+        "SELECT event_id, profit_replay_state, profit_replay_error
+         FROM relay_event_inbox
+         WHERE instance_id = ?
+         ORDER BY event_id",
+    )
+    .bind("aether-primary")
+    .fetch_all(&pool)
+    .await
+    .expect("upgraded relay inbox replay states should load");
+    assert_eq!(
+        replay_states,
+        vec![
+            (
+                "financial-before-marker".to_string(),
+                "eligible".to_string(),
+                None,
+            ),
+            (
+                "usage-before-marker".to_string(),
+                "eligible".to_string(),
+                None,
+            ),
+        ],
+        "existing pending rows must become eligible without discarding their replay state"
+    );
 }

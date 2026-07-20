@@ -508,7 +508,7 @@ fn usage_sql_aggregate_usage_audits_supports_daily_model_and_provider_aggregates
 
 #[test]
 fn usage_sql_provider_aggregation_excludes_unknown_provider_labels() {
-    let source = include_str!("mod.rs");
+    let source = include_str!("mod.rs").replace("\r\n", "\n");
     assert!(source.contains("const USAGE_PROVIDER_IDENTITY_FILTER_SQL"));
     assert!(source.contains("const USAGE_PROVIDER_IDENTITY_SOURCE_SQL"));
     assert!(source.contains(r#"BTRIM(COALESCE("usage".provider_id, '')) <> ''"#));
@@ -796,9 +796,10 @@ fn usage_sql_casts_json_payload_bind_parameters_explicitly() {
 
 #[test]
 fn usage_sql_insert_values_aligns_request_metadata_and_timestamps() {
-    assert!(super::UPSERT_SQL.contains("\n  $51::json,\n  $52,\n  $53::json,\n  CASE"));
-    assert!(super::UPSERT_SQL.contains("WHEN $54 IS NULL THEN NULL"));
-    assert!(super::UPSERT_SQL.contains("TO_TIMESTAMP($55::double precision)"));
+    let sql = super::UPSERT_SQL.replace("\r\n", "\n");
+    assert!(sql.contains("\n  $51::json,\n  $52,\n  $53::json,\n  CASE"));
+    assert!(sql.contains("WHEN $54 IS NULL THEN NULL"));
+    assert!(sql.contains("TO_TIMESTAMP($55::double precision)"));
 }
 
 #[test]
@@ -835,7 +836,7 @@ fn usage_sql_writes_usage_settlement_pricing_snapshots() {
 
 #[test]
 fn usage_sql_settlement_pricing_snapshot_billing_values_use_authoritative_incoming_values() {
-    let sql = super::UPSERT_USAGE_SETTLEMENT_PRICING_SNAPSHOT_SQL;
+    let sql = super::UPSERT_USAGE_SETTLEMENT_PRICING_SNAPSHOT_SQL.replace("\r\n", "\n");
     for field in [
         "billing_input_tokens",
         "billing_effective_input_tokens",

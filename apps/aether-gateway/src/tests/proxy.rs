@@ -18,6 +18,10 @@ use aether_data::repository::provider_catalog::InMemoryProviderCatalogReadReposi
 use aether_data_contracts::repository::provider_catalog::{
     StoredProviderCatalogEndpoint, StoredProviderCatalogKey, StoredProviderCatalogProvider,
 };
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
+use chrono::Utc;
+use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 
 fn hash_api_key(value: &str) -> String {
@@ -210,6 +214,43 @@ fn current_unix_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+fn signed_relay_headers(
+    secret: &str,
+    request_id: &str,
+    group: &str,
+    model: &str,
+) -> Vec<(&'static str, String)> {
+    let context = serde_json::json!({
+        "instance_id": "aether-primary",
+        "request_id": request_id,
+        "subject_id": "subject-1",
+        "token_subject_id": "token-subject-1",
+        "channel_id": "41",
+        "group": group,
+        "model": model,
+        "relay_format": "openai",
+        "config_revision": 7,
+        "expires_at": Utc::now().timestamp() + 30,
+    });
+    let encoded = URL_SAFE_NO_PAD
+        .encode(serde_json::to_vec(&context).expect("relay context should serialize"));
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
+        .expect("relay secret should initialize HMAC");
+    mac.update(encoded.as_bytes());
+    let signature = mac
+        .finalize()
+        .into_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+
+    vec![
+        ("X-Aether-Instance-ID", "aether-primary".to_string()),
+        ("X-Aether-Relay-Context", encoded),
+        ("X-Aether-Relay-Signature", signature),
+    ]
 }
 
 #[tokio::test]
@@ -617,6 +658,124 @@ async fn gateway_forwards_public_request_to_remote_tunnel_owner_before_fallback_
     gateway_handle.abort();
     owner_handle.abort();
     fallback_probe_handle.abort();
+}
+
+#[tokio::test]
+async fn verified_relay_request_bypasses_tunnel_affinity_owner_forwarding() {
+    let owner_hits = Arc::new(Mutex::new(0usize));
+    let owner_hits_clone = Arc::clone(&owner_hits);
+    let owner = Router::new().route(
+        "/v1/chat/completions",
+        any(move |_request: Request| {
+            let owner_hits_inner = Arc::clone(&owner_hits_clone);
+            async move {
+                *owner_hits_inner.lock().expect("mutex should lock") += 1;
+                (StatusCode::OK, Body::from("owner-should-not-receive-relay"))
+            }
+        }),
+    );
+    let (owner_url, owner_handle) = start_server(owner).await;
+
+    let provider_catalog_repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        vec![sample_provider("provider-relay-owner")],
+        vec![sample_endpoint(
+            "endpoint-relay-owner",
+            "provider-relay-owner",
+        )],
+        vec![sample_key(
+            "key-relay-owner",
+            "provider-relay-owner",
+            "node-relay-owner",
+        )],
+    ));
+    let auth_repository = Arc::new(InMemoryAuthApiKeySnapshotRepository::seed(vec![(
+        Some(hash_api_key("sk-client-relay-affinity")),
+        sample_auth_snapshot(
+            "api-key-relay-affinity-1",
+            "user-relay-affinity-1",
+            "gpt-4.1",
+        ),
+    )]));
+    let observed_at_unix_secs = current_unix_secs();
+    let data_state = crate::data::GatewayDataState::with_provider_transport_reader_for_tests(
+        provider_catalog_repository,
+        "development-key",
+    )
+    .with_auth_api_key_reader(auth_repository)
+    .with_system_config_values_for_tests(vec![(
+        tunnel_attachment_key("node-relay-owner"),
+        serde_json::to_value(crate::tunnel::TunnelAttachmentRecord {
+            gateway_instance_id: "gateway-b".to_string(),
+            relay_base_url: owner_url,
+            conn_count: 1,
+            observed_at_unix_secs,
+        })
+        .expect("attachment should serialize"),
+    )]);
+
+    let mut state = AppState::new().expect("gateway state should build");
+    state = state
+        .with_data_state_for_tests(data_state)
+        .with_tunnel_identity_for_tests("gateway-a", Some("http://gateway-a:8080"));
+    state.configure_relay_engine_with_config_and_verifier(
+        {
+            let mut config = crate::relay::RelayEngineConfig::default();
+            config.enabled = true;
+            config
+        },
+        crate::relay::collaboration::RelayVerifier::new(
+            "relay-secret".to_string(),
+            "aether-primary".to_string(),
+            aether_runtime_state::RuntimeState::memory(Default::default()),
+        ),
+    );
+    state.remember_scheduler_affinity_target(
+        "scheduler_affinity:api-key-relay-affinity-1:openai:chat:gpt-4.1",
+        crate::cache::SchedulerAffinityTarget {
+            provider_id: "provider-relay-owner".to_string(),
+            endpoint_id: "endpoint-relay-owner".to_string(),
+            key_id: "key-relay-owner".to_string(),
+        },
+        Duration::from_secs(300),
+        100,
+    );
+    let gateway = build_router_with_state(state);
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    let mut request = reqwest::Client::new()
+        .post(format!("{gateway_url}/v1/chat/completions"))
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .header(
+            http::header::AUTHORIZATION,
+            "Bearer sk-client-relay-affinity",
+        )
+        .header(TRACE_ID_HEADER, "forged-client-trace-relay-affinity");
+    for (name, value) in signed_relay_headers(
+        "relay-secret",
+        "newapi-relay-affinity-123",
+        "default",
+        "gpt-4.1",
+    ) {
+        request = request.header(name, value);
+    }
+    let response = request
+        .body("{\"model\":\"gpt-4.1\",\"messages\":[]}")
+        .send()
+        .await
+        .expect("relay request should complete");
+
+    assert_ne!(response.status(), StatusCode::OK);
+    assert_ne!(
+        response
+            .headers()
+            .get(EXECUTION_PATH_HEADER)
+            .and_then(|value| value.to_str().ok()),
+        Some("tunnel_affinity_forward")
+    );
+    assert_eq!(*owner_hits.lock().expect("mutex should lock"), 0);
+
+    gateway_handle.abort();
+    owner_handle.abort();
 }
 
 #[tokio::test]

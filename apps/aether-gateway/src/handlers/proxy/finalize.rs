@@ -58,12 +58,10 @@ pub(super) fn finalize_gateway_response(
     request_permit: Option<AdmissionPermit>,
 ) -> Response<Body> {
     attach_control_decision_headers(&mut response, control_decision);
-    if !response.headers().contains_key(TRACE_ID_HEADER) {
-        response.headers_mut().insert(
-            HeaderName::from_static(TRACE_ID_HEADER),
-            HeaderValue::from_str(trace_id).expect("trace id should be a valid header value"),
-        );
-    }
+    response.headers_mut().insert(
+        HeaderName::from_static(TRACE_ID_HEADER),
+        HeaderValue::from_str(trace_id).expect("trace id should be a valid header value"),
+    );
     response.headers_mut().insert(
         HeaderName::from_static(EXECUTION_PATH_HEADER),
         HeaderValue::from_static(execution_path),
@@ -264,6 +262,7 @@ pub(super) fn finalize_gateway_response_with_context(
 #[cfg(test)]
 mod tests {
     use super::{finalize_gateway_response, request_wants_stream};
+    use crate::constants::{CONTROL_REQUEST_ID_HEADER, TRACE_ID_HEADER};
     use crate::control::{GatewayControlDecision, GatewayPublicRequestContext};
     use crate::AppState;
     use axum::body::{Body, Bytes};
@@ -387,5 +386,140 @@ mod tests {
             logs[0]["path"],
             "/v1beta/models/gemini-3-flash-preview:generateContent?alt=sse"
         );
+    }
+
+    #[test]
+    fn finalize_gateway_response_log_capture_isolated_from_parallel_finalization() {
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let capture_barrier = Arc::clone(&barrier);
+        let capture = std::thread::spawn(move || {
+            let state = AppState::new().expect("gateway state should build");
+            let writer = SharedBuffer::default();
+            let subscriber = tracing_subscriber::registry().with(
+                tracing_subscriber::fmt::layer()
+                    .json()
+                    .flatten_event(true)
+                    .with_current_span(false)
+                    .with_span_list(false)
+                    .with_writer(writer.clone())
+                    .with_filter(LevelFilter::INFO),
+            );
+            let remote_addr = "127.0.0.1:8080"
+                .parse()
+                .expect("remote address should parse");
+            let response = Response::builder()
+                .status(StatusCode::OK)
+                .body(Body::empty())
+                .expect("response should build");
+
+            capture_barrier.wait();
+            let dispatch = tracing::Dispatch::new(subscriber);
+            let _guard = tracing::dispatcher::set_default(&dispatch);
+            let _response = finalize_gateway_response(
+                &state,
+                response,
+                "trace-finalize-capture",
+                &remote_addr,
+                &Method::GET,
+                "/v1/models?key=secret",
+                None,
+                "public_proxy_passthrough",
+                &Instant::now(),
+                None,
+            );
+
+            writer.lines()
+        });
+
+        let unscoped_barrier = Arc::clone(&barrier);
+        let unscoped = std::thread::spawn(move || {
+            let state = AppState::new().expect("gateway state should build");
+            let writer = SharedBuffer::default();
+            let subscriber = tracing_subscriber::registry().with(
+                tracing_subscriber::fmt::layer()
+                    .json()
+                    .flatten_event(true)
+                    .with_current_span(false)
+                    .with_span_list(false)
+                    .with_writer(writer)
+                    .with_filter(LevelFilter::INFO),
+            );
+            let remote_addr = "127.0.0.1:8081"
+                .parse()
+                .expect("remote address should parse");
+            let response = Response::builder()
+                .status(StatusCode::OK)
+                .body(Body::empty())
+                .expect("response should build");
+
+            unscoped_barrier.wait();
+            let dispatch = tracing::Dispatch::new(subscriber);
+            let _guard = tracing::dispatcher::set_default(&dispatch);
+            let _response = finalize_gateway_response(
+                &state,
+                response,
+                "trace-finalize-unscoped",
+                &remote_addr,
+                &Method::GET,
+                "/v1/models",
+                None,
+                "public_proxy_passthrough",
+                &Instant::now(),
+                None,
+            );
+        });
+
+        let logs = capture.join().expect("capture thread should complete");
+        unscoped.join().expect("unscoped thread should complete");
+
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0]["path"], "/v1/models");
+    }
+
+    #[test]
+    fn finalize_gateway_response_makes_gateway_trace_authoritative() {
+        let state = AppState::new().expect("gateway state should build");
+        let remote_addr = "127.0.0.1:8080"
+            .parse()
+            .expect("remote address should parse");
+
+        for status in [StatusCode::OK, StatusCode::BAD_GATEWAY] {
+            let response = Response::builder()
+                .status(status)
+                .header(TRACE_ID_HEADER, "forged-upstream-trace")
+                .header(CONTROL_REQUEST_ID_HEADER, "upstream-request-123")
+                .body(Body::empty())
+                .expect("response should build");
+
+            let response = finalize_gateway_response(
+                &state,
+                response,
+                "gateway-trace-ordinary-123",
+                &remote_addr,
+                &Method::GET,
+                "/v1/models",
+                None,
+                "public_proxy_passthrough",
+                &Instant::now(),
+                None,
+            );
+
+            assert_eq!(
+                response
+                    .headers()
+                    .get(TRACE_ID_HEADER)
+                    .and_then(|value| value.to_str().ok()),
+                Some("gateway-trace-ordinary-123"),
+                "gateway trace must be authoritative for {status}"
+            );
+            assert_eq!(
+                response
+                    .headers()
+                    .get(CONTROL_REQUEST_ID_HEADER)
+                    .and_then(|value| value.to_str().ok()),
+                Some("upstream-request-123"),
+                "dedicated upstream request ID must be preserved for {status}"
+            );
+        }
     }
 }

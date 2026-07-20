@@ -241,9 +241,26 @@ mod tests {
         .expect("action config should resolve");
 
         assert_eq!(resolved.get("endpoint"), Some(&json!("/api/user/profile")));
-        assert_eq!(resolved.get("quota_divisor"), Some(&json!(500000)));
+        assert!(resolved.get("quota_divisor").is_none());
         assert_eq!(resolved.get("method"), Some(&json!("GET")));
         assert!(resolved.get("checkin_endpoint").is_none());
+    }
+
+    #[test]
+    fn new_api_default_balance_config_requires_an_explicit_quota_divisor() {
+        let resolved = resolve_action_config(
+            "new_api",
+            &json!({})
+                .as_object()
+                .cloned()
+                .expect("config should be object"),
+            "query_balance",
+            None,
+        )
+        .expect("action config should resolve");
+
+        assert_eq!(resolved.get("endpoint"), Some(&json!("/api/user/self")));
+        assert!(resolved.get("quota_divisor").is_none());
     }
 
     #[test]

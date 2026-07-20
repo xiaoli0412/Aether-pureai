@@ -1,0 +1,65 @@
+{
+  "pbtResults": {
+    "7.3 编写通道配置校验的 property test": {
+      "status": "passed",
+      "lastRunTimestamp": 1784050609454
+    },
+    "2.2 编写定价计算的 property test": {
+      "status": "passed",
+      "lastRunTimestamp": 1784050610297
+    },
+    "3.2 编写健康评分公式的 property test": {
+      "status": "passed",
+      "lastRunTimestamp": 1784050611190
+    },
+    "3.3 编写熔断状态转换的 property test": {
+      "status": "passed",
+      "lastRunTimestamp": 1784050612171
+    },
+    "4.2 编写综合评分公式的 property test": {
+      "status": "passed",
+      "lastRunTimestamp": 1784050612991
+    },
+    "4.3 编写路由选择排序不变量的 property test": {
+      "status": "passed",
+      "lastRunTimestamp": 1784050613937
+    },
+    "4.4 编写禁用和熔断通道排除的 property test": {
+      "status": "passed",
+      "lastRunTimestamp": 1784050615016
+    },
+    "4.5 编写空候选列表返回 None 的 property test": {
+      "status": "passed",
+      "lastRunTimestamp": 1784050616079
+    },
+    "4.6 编写加权随机平局打破的 property test": {
+      "status": "passed",
+      "lastRunTimestamp": 1784050617200
+    },
+    "5.2 编写利润计算公式的 property test": {
+      "status": "passed",
+      "lastRunTimestamp": 1784050618051
+    },
+    "5.3 编写利润率告警阈值检测的 property test": {
+      "status": "passed",
+      "lastRunTimestamp": 1784050619191
+    },
+    "6.2 编写目标利润率定价公式的 property test": {
+      "status": "passed",
+      "lastRunTimestamp": 1784050620206
+    },
+    "6.3 编写固定定价策略透传的 property test": {
+      "status": "passed",
+      "lastRunTimestamp": 1784050621149
+    },
+    "6.4 编写亏损检测的 property test": {
+      "status": "passed",
+      "lastRunTimestamp": 1784050622054
+    },
+    "7.4 编写对账异常检测的 property test": {
+      "status": "passed",
+      "lastRunTimestamp": 1784050622878
+    }
+  },
+  "executionHistory": {}
+}

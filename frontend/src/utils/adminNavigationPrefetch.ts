@@ -20,6 +20,9 @@ const adminRouteWarmers: Record<string, () => Promise<void>> = {
   '/admin/pool': async () => {
     await import('@/views/admin/PoolManagement.vue')
   },
+  '/admin/relay-integration': async () => {
+    await import('@/views/admin/RelayIntegrationStatus.vue')
+  },
   '/admin/payment-gateways': async () => {
     await import('@/views/admin/PaymentGatewaySettings.vue')
   },

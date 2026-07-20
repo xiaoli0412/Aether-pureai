@@ -29,6 +29,7 @@ members = [
     "crates/aether-http",
     "crates/aether-runtime",
     "crates/aether-testkit",
+    "crates/aether-relay-core",
 ]
 default-members = [
     "apps/aether-gateway",
@@ -69,6 +70,7 @@ aether-gateway = { path = "apps/aether-gateway" }
 aether-http = { path = "crates/aether-http" }
 aether-runtime = { path = "crates/aether-runtime" }
 aether-testkit = { path = "crates/aether-testkit" }
+aether-relay-core = { path = "crates/aether-relay-core" }
 aes = "0.8"
 aes-gcm = "0.10"
 async-stream = "0.3"

@@ -92,6 +92,19 @@ impl std::fmt::Debug for TestExecutionRuntimeSyncOverride {
     }
 }
 
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct TestRelayIntegrationConfigStore(
+    pub(crate) aether_data::repository::integration_configs::IntegrationConfigStore,
+);
+
+#[cfg(test)]
+impl std::fmt::Debug for TestRelayIntegrationConfigStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TestRelayIntegrationConfigStore(..)")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct FrontdoorRuntimeGuardConfig {
     pub(crate) request_body_read_timeout: Duration,
@@ -415,6 +428,9 @@ pub struct AppState {
     pub(crate) frontdoor_cors: Option<Arc<FrontdoorCorsConfig>>,
     pub(crate) frontdoor_user_rpm: Arc<FrontdoorUserRpmLimiter>,
     pub(crate) tunnel: crate::tunnel::EmbeddedTunnelState,
+    pub(crate) relay_engine: Option<Arc<crate::relay::RelayEngine>>,
+    #[cfg(test)]
+    pub(crate) relay_integration_config_store_override: Option<TestRelayIntegrationConfigStore>,
     pub(crate) provider_transport_snapshot_cache:
         Arc<DashMap<ProviderTransportSnapshotCacheKey, CachedProviderTransportSnapshot>>,
     pub(crate) provider_transport_snapshot_inflight:

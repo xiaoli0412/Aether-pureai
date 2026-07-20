@@ -1,0 +1,402 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.new-api.local/aether-newapi/v1",
+  "title": "New API and AETHER collaboration contract",
+  "oneOf": [
+    { "$ref": "#/$defs/relay_context" },
+    { "$ref": "#/$defs/events_response" },
+    { "$ref": "#/$defs/pricing_response" },
+    { "$ref": "#/$defs/snapshot_response" },
+    { "$ref": "#/$defs/capabilities" },
+    { "$ref": "#/$defs/instance_config" },
+    { "$ref": "#/$defs/instance_status_response" },
+    { "$ref": "#/$defs/revision_conflict_response" }
+  ],
+  "$defs": {
+    "id_string": {
+      "type": "string",
+      "minLength": 1
+    },
+    "request_id_string": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "pattern": "^[!-~]+$"
+    },
+    "decimal_string": {
+      "type": "string",
+      "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$"
+    },
+    "non_negative_decimal_string": {
+      "type": "string",
+      "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$"
+    },
+    "relay_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "instance_id",
+        "request_id",
+        "subject_id",
+        "token_subject_id",
+        "channel_id",
+        "group",
+        "model",
+        "relay_format",
+        "config_revision",
+        "expires_at"
+      ],
+      "properties": {
+        "instance_id": { "$ref": "#/$defs/id_string" },
+        "request_id": { "$ref": "#/$defs/request_id_string" },
+        "subject_id": { "$ref": "#/$defs/id_string" },
+        "token_subject_id": { "$ref": "#/$defs/id_string" },
+        "channel_id": { "$ref": "#/$defs/id_string" },
+        "group": { "type": "string" },
+        "model": { "type": "string" },
+        "relay_format": { "type": "string" },
+        "config_revision": { "type": "integer", "minimum": 0 },
+        "expires_at": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "ledger_event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "instance_id",
+        "dedupe_key",
+        "event_type",
+        "occurred_at",
+        "created_at",
+        "quota_per_unit",
+        "payload"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id_string" },
+        "instance_id": { "$ref": "#/$defs/id_string" },
+        "dedupe_key": { "type": "string", "minLength": 1 },
+        "event_type": {
+          "enum": [
+            "usage_settled",
+            "financial_posted",
+            "subscription_changed",
+            "pricing_changed",
+            "channel_changed",
+            "channel_balance_observed"
+          ]
+        },
+        "occurred_at": { "type": "integer", "minimum": 0 },
+        "created_at": { "type": "integer", "minimum": 0 },
+        "quota_per_unit": { "$ref": "#/$defs/non_negative_decimal_string" },
+        "payload": {
+          "type": "object"
+        }
+      }
+    },
+    "events_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["success", "message", "data"],
+      "properties": {
+        "success": { "const": true },
+        "message": { "type": "string" },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["contract_version", "events", "next_cursor", "has_more"],
+          "properties": {
+            "contract_version": { "const": "aether-newapi-events/v1" },
+            "events": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/ledger_event" }
+            },
+            "next_cursor": { "type": "string" },
+            "has_more": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "pricing_model": {
+      "type": "object",
+      "required": ["billing_mode", "charge_mode", "cost_estimation_status"],
+      "properties": {
+        "billing_mode": { "type": "string" },
+        "charge_mode": { "type": "string" },
+        "cost_estimation_status": { "type": "string" },
+        "model_ratio": { "$ref": "#/$defs/non_negative_decimal_string" },
+        "completion_ratio": { "$ref": "#/$defs/non_negative_decimal_string" },
+        "cache_ratio": { "$ref": "#/$defs/non_negative_decimal_string" },
+        "create_cache_5m_ratio": { "$ref": "#/$defs/non_negative_decimal_string" },
+        "create_cache_1h_ratio": { "$ref": "#/$defs/non_negative_decimal_string" },
+        "image_ratio": { "$ref": "#/$defs/non_negative_decimal_string" },
+        "audio_ratio": { "$ref": "#/$defs/non_negative_decimal_string" },
+        "audio_completion_ratio": { "$ref": "#/$defs/non_negative_decimal_string" },
+        "model_price": { "$ref": "#/$defs/non_negative_decimal_string" },
+        "billing_expr": { "type": "string" },
+        "billing_expr_version": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "pricing_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["success", "message", "data"],
+      "properties": {
+        "success": { "const": true },
+        "message": { "type": "string" },
+        "data": {
+          "type": "object",
+          "required": [
+            "contract_version",
+            "snapshot_revision",
+            "quota_per_unit",
+            "pricing",
+            "models",
+            "capabilities"
+          ],
+          "properties": {
+            "contract_version": { "const": "v1" },
+            "snapshot_revision": { "type": "integer", "minimum": 0 },
+            "quota_per_unit": { "$ref": "#/$defs/non_negative_decimal_string" },
+            "upstream_group": { "type": "string" },
+            "group_ratio": { "$ref": "#/$defs/non_negative_decimal_string" },
+            "group_ratios": {
+              "type": "object",
+              "additionalProperties": { "$ref": "#/$defs/non_negative_decimal_string" }
+            },
+            "pricing": {
+              "type": "object",
+              "additionalProperties": {
+                "type": ["object", "string"]
+              }
+            },
+            "models": {
+              "type": "object",
+              "additionalProperties": { "$ref": "#/$defs/pricing_model" }
+            },
+            "capabilities": { "type": "object" }
+          }
+        }
+      }
+    },
+    "snapshot_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["success", "message", "data"],
+      "properties": {
+        "success": { "const": true },
+        "message": { "type": "string" },
+        "data": {
+          "type": "object",
+          "required": [
+            "contract_version",
+            "snapshot_revision",
+            "from",
+            "to",
+            "events",
+            "next_cursor",
+            "has_more",
+            "quota_per_unit",
+            "historical_analysis_state"
+          ],
+          "properties": {
+            "contract_version": { "const": "aether-newapi-snapshot/v1" },
+            "snapshot_revision": { "type": "integer", "minimum": 0 },
+            "from": { "type": "integer", "minimum": 0 },
+            "to": { "type": "integer", "minimum": 0 },
+            "events": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/ledger_event" }
+            },
+            "next_cursor": { "type": "string" },
+            "has_more": { "type": "boolean" },
+            "quota_per_unit": { "$ref": "#/$defs/non_negative_decimal_string" },
+            "historical_analysis_state": {
+              "enum": ["known", "estimated", "unknown"]
+            },
+            "usage": { "type": "object" },
+            "financial": { "type": "object" },
+            "subscriptions": { "type": "object" },
+            "channels": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["id", "balance", "used_quota"],
+                "properties": {
+                  "id": { "$ref": "#/$defs/id_string" },
+                  "balance": { "$ref": "#/$defs/decimal_string" },
+                  "used_quota": { "$ref": "#/$defs/decimal_string" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "supported_modes",
+        "supported_formats",
+        "capability_version",
+        "features"
+      ],
+      "properties": {
+        "supported_modes": {
+          "type": "array",
+          "contains": { "const": "direct_channel" }
+        },
+        "supported_formats": {
+          "type": "array",
+          "contains": { "const": "openai" }
+        },
+        "capability_version": {
+          "type": "string",
+          "pattern": "^0\\.1\\.[0-9]+$"
+        },
+        "max_concurrent_requests": { "type": "integer", "minimum": 0 },
+        "features": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "instance_config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "instance_id",
+        "route_profile",
+        "execution_mode",
+        "enabled",
+        "capability_version",
+        "base_revision"
+      ],
+      "properties": {
+        "instance_id": { "$ref": "#/$defs/id_string" },
+        "route_profile": { "type": "string" },
+        "execution_mode": {
+          "enum": ["direct_channel", "disabled"]
+        },
+        "enabled": { "type": "boolean" },
+        "capability_version": { "type": "string" },
+        "base_revision": { "type": "integer", "minimum": 0 },
+        "updated_at": { "type": "string" },
+        "credential_rotation_ack": { "$ref": "#/$defs/credential_rotation_ack" }
+      }
+    },
+    "instance_status_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "instance_id",
+        "healthy",
+        "last_sync_at",
+        "capability_version",
+        "base_revision",
+        "uptime_secs",
+        "active_channels",
+        "routing_mode"
+      ],
+      "properties": {
+        "instance_id": { "$ref": "#/$defs/id_string" },
+        "healthy": {
+          "type": "boolean",
+          "description": "control_execution_readiness_not_upstream_sla"
+        },
+        "last_sync_at": {
+          "oneOf": [
+            { "type": "string", "format": "date-time" },
+            { "type": "null" }
+          ]
+        },
+        "capability_version": { "type": "string" },
+        "base_revision": { "type": "integer", "minimum": 0 },
+        "uptime_secs": { "type": "integer", "minimum": 0 },
+        "active_channels": { "type": "integer", "minimum": 0 },
+        "routing_mode": {
+          "enum": [
+            "direct_channel",
+            "disabled",
+            "parallel_shadow",
+            "aether_decision"
+          ]
+        }
+      }
+    },
+    "credential_rotation_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "control_secret",
+        "relay_signing_secret",
+        "transition_expires_at",
+        "revoke_previous"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id_string" },
+        "control_secret": { "type": "string", "minLength": 1 },
+        "relay_signing_secret": { "type": "string", "minLength": 1 },
+        "transition_expires_at": { "type": "integer", "minimum": 0 },
+        "revoke_previous": { "type": "boolean" }
+      }
+    },
+    "credential_rotation_ack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rotation_id",
+        "credential_revision",
+        "transition_expires_at",
+        "state"
+      ],
+      "properties": {
+        "rotation_id": { "$ref": "#/$defs/id_string" },
+        "credential_revision": { "type": "integer", "minimum": 1 },
+        "transition_expires_at": { "type": "integer", "minimum": 0 },
+        "state": { "enum": ["applied"] }
+      }
+    },
+    "revision_conflict_diff_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requested", "current"],
+      "properties": {
+        "requested": { "type": ["string", "boolean"] },
+        "current": { "type": ["string", "boolean"] }
+      }
+    },
+    "revision_conflict_diff": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^.+$": { "$ref": "#/$defs/revision_conflict_diff_entry" }
+      }
+    },
+    "revision_conflict_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["error", "current_revision", "current_config", "diff"],
+      "properties": {
+        "error": { "type": "string", "minLength": 1 },
+        "current_revision": { "type": "integer", "minimum": 0 },
+        "current_config": { "$ref": "#/$defs/instance_config" },
+        "diff": { "$ref": "#/$defs/revision_conflict_diff" }
+      }
+    },
+    "instance_update_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["base_revision"],
+      "properties": {
+        "route_profile": { "type": "string" },
+        "execution_mode": { "enum": ["direct_channel", "disabled"] },
+        "enabled": { "type": "boolean" },
+        "base_revision": { "type": "integer", "minimum": 0 },
+        "credential_rotation": { "$ref": "#/$defs/credential_rotation_request" }
+      }
+    }
+  }
+}

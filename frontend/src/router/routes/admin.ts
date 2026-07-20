@@ -84,6 +84,11 @@ export const adminRoutes: RouteRecordRaw[] = [
         component: view(() => import('@/views/admin/RoutingProfiles.vue'))
       },
       {
+        path: 'relay-integration',
+        name: 'RelayIntegrationStatus',
+        component: view(() => import('@/views/admin/RelayIntegrationStatus.vue'))
+      },
+      {
         path: 'health-monitor',
         name: 'HealthMonitor',
         component: view(() => import('@/views/shared/HealthMonitor.vue'))

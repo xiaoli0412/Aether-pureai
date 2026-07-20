@@ -5,8 +5,41 @@ use super::{
     EXECUTION_PATH_HEADER, EXECUTION_PATH_LOCAL_EXECUTION_RUNTIME_MISS, TRACE_ID_HEADER,
 };
 
-#[tokio::test]
-async fn gateway_locally_denies_sync_ai_control_execute_when_opted_in_and_execution_runtime_missing(
+const CONTROL_EXECUTE_TEST_STACK_BYTES: usize = 16 * 1024 * 1024;
+
+fn run_control_execute_test<F, Fut>(test_name: &'static str, make_future: F)
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()> + 'static,
+{
+    let handle = std::thread::Builder::new()
+        .name(test_name.to_string())
+        .stack_size(CONTROL_EXECUTE_TEST_STACK_BYTES)
+        .spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("control execute test runtime should build")
+                .block_on(make_future());
+        })
+        .expect("control execute test thread should spawn");
+
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[test]
+fn gateway_locally_denies_sync_ai_control_execute_when_opted_in_and_execution_runtime_missing() {
+    run_control_execute_test(
+        stringify!(
+            gateway_locally_denies_sync_ai_control_execute_when_opted_in_and_execution_runtime_missing
+        ),
+        || gateway_locally_denies_sync_ai_control_execute_when_opted_in_and_execution_runtime_missing_impl(),
+    );
+}
+
+async fn gateway_locally_denies_sync_ai_control_execute_when_opted_in_and_execution_runtime_missing_impl(
 ) {
     let execute_hits = Arc::new(Mutex::new(0usize));
     let execute_hits_clone = Arc::clone(&execute_hits);
@@ -136,8 +169,17 @@ async fn gateway_locally_denies_sync_ai_control_execute_when_opted_in_and_execut
     upstream_handle.abort();
 }
 
-#[tokio::test]
-async fn gateway_locally_denies_stream_ai_control_execute_when_opted_in_and_execution_runtime_missing(
+#[test]
+fn gateway_locally_denies_stream_ai_control_execute_when_opted_in_and_execution_runtime_missing() {
+    run_control_execute_test(
+        stringify!(
+            gateway_locally_denies_stream_ai_control_execute_when_opted_in_and_execution_runtime_missing
+        ),
+        || gateway_locally_denies_stream_ai_control_execute_when_opted_in_and_execution_runtime_missing_impl(),
+    );
+}
+
+async fn gateway_locally_denies_stream_ai_control_execute_when_opted_in_and_execution_runtime_missing_impl(
 ) {
     let execute_hits = Arc::new(Mutex::new(0usize));
     let execute_hits_clone = Arc::clone(&execute_hits);
@@ -271,8 +313,20 @@ async fn gateway_locally_denies_stream_ai_control_execute_when_opted_in_and_exec
     upstream_handle.abort();
 }
 
-#[tokio::test]
-async fn gateway_does_not_proxy_control_execute_over_http_when_opted_in_and_execution_runtime_misses_sync_ai_routes(
+#[test]
+fn gateway_does_not_proxy_control_execute_over_http_when_opted_in_and_execution_runtime_misses_sync_ai_routes(
+) {
+    run_control_execute_test(
+        stringify!(
+            gateway_does_not_proxy_control_execute_over_http_when_opted_in_and_execution_runtime_misses_sync_ai_routes
+        ),
+        || {
+            gateway_does_not_proxy_control_execute_over_http_when_opted_in_and_execution_runtime_misses_sync_ai_routes_impl()
+        },
+    );
+}
+
+async fn gateway_does_not_proxy_control_execute_over_http_when_opted_in_and_execution_runtime_misses_sync_ai_routes_impl(
 ) {
     let plan_hits = Arc::new(Mutex::new(0usize));
     let plan_hits_clone = Arc::clone(&plan_hits);
@@ -404,8 +458,20 @@ async fn gateway_does_not_proxy_control_execute_over_http_when_opted_in_and_exec
     upstream_handle.abort();
 }
 
-#[tokio::test]
-async fn gateway_does_not_proxy_control_execute_over_http_when_opted_in_and_execution_runtime_misses_stream_ai_routes(
+#[test]
+fn gateway_does_not_proxy_control_execute_over_http_when_opted_in_and_execution_runtime_misses_stream_ai_routes(
+) {
+    run_control_execute_test(
+        stringify!(
+            gateway_does_not_proxy_control_execute_over_http_when_opted_in_and_execution_runtime_misses_stream_ai_routes
+        ),
+        || {
+            gateway_does_not_proxy_control_execute_over_http_when_opted_in_and_execution_runtime_misses_stream_ai_routes_impl()
+        },
+    );
+}
+
+async fn gateway_does_not_proxy_control_execute_over_http_when_opted_in_and_execution_runtime_misses_stream_ai_routes_impl(
 ) {
     let plan_hits = Arc::new(Mutex::new(0usize));
     let plan_hits_clone = Arc::clone(&plan_hits);

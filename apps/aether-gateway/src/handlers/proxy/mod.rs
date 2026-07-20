@@ -37,9 +37,9 @@ use crate::constants::{
     TUNNEL_AFFINITY_OWNER_INSTANCE_HEADER,
 };
 use crate::control::{
-    allows_control_execute_emergency, management_token_permission_keys_from_value,
-    maybe_execute_via_control, request_model_local_rejection, should_buffer_request_for_local_auth,
-    trusted_auth_local_rejection, GatewayControlDecision, GatewayPublicRequestContext,
+    allows_control_execute_emergency, maybe_execute_via_control, request_model_local_rejection,
+    should_buffer_request_for_local_auth, trusted_auth_local_rejection, GatewayControlDecision,
+    GatewayPublicRequestContext,
 };
 use crate::executor::{
     beautify_local_execution_client_error_message, build_local_execution_runtime_miss_context,
@@ -52,8 +52,9 @@ use crate::frontdoor_loop_guard::{
 };
 use crate::handlers::shared::{
     build_admin_proxy_auth_required_response, build_unhandled_admin_proxy_response, ip_rules_allow,
-    json_ip_rules_allow, local_proxy_route_requires_buffered_body, request_enables_control_execute,
-    should_strip_forwarded_provider_credential_header, should_strip_forwarded_trusted_admin_header,
+    local_proxy_route_requires_buffered_body, promote_management_token_admin_principal,
+    request_enables_control_execute, should_strip_forwarded_provider_credential_header,
+    should_strip_forwarded_trusted_admin_header,
 };
 use crate::headers::{
     effective_client_ip, extract_or_generate_trace_id, request_origin_from_headers_and_remote_addr,
@@ -73,8 +74,8 @@ use crate::{
 use axum::body::{to_bytes, Body, Bytes};
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{self, header::HeaderName, header::HeaderValue, Response};
+use chrono::Utc;
 use futures_util::StreamExt;
-use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, time::Instant};
 use tracing::{debug, info, warn};
 
@@ -102,8 +103,186 @@ const AUTH_API_KEY_CONCURRENCY_LIMIT_REACHED_DETAIL: &str =
 const LOCAL_EXECUTION_PLANNING_TIMEOUT_DETAIL: &str =
     "当前 AI 请求在本地执行规划阶段超时，请稍后重试";
 const EXECUTION_PATH_TUNNEL_AFFINITY_FORWARD: &str = "tunnel_affinity_forward";
-const MANAGEMENT_TOKEN_PREFIX: &str = "ae-";
-const LEGACY_MANAGEMENT_TOKEN_PREFIX: &str = "ae_";
+const TRUSTED_RELAY_EXECUTION_UNAVAILABLE_DETAIL: &str = "Aether relay execution is unavailable";
+const PERSISTED_RELAY_CREDENTIALS_UNAVAILABLE_DETAIL: &str =
+    "Aether relay credentials are unavailable";
+
+async fn trusted_relay_execution_profile(
+    state: &AppState,
+    context: Option<&crate::relay::collaboration::TrustedRelayContext>,
+) -> Result<
+    Option<crate::routing::TrustedRelayRoutingProfile>,
+    crate::relay::collaboration::RelayIngressRejection,
+> {
+    let Some(context) = context else {
+        return Ok(None);
+    };
+    let Some(store) = state.relay_integration_config_store() else {
+        warn!(
+            instance_id = %context.0.instance_id,
+            request_id = %context.0.request_id,
+            "gateway rejected trusted relay request without a persisted integration config store"
+        );
+        return Err(crate::relay::collaboration::RelayIngressRejection {
+            status: http::StatusCode::SERVICE_UNAVAILABLE,
+            message: TRUSTED_RELAY_EXECUTION_UNAVAILABLE_DETAIL.to_string(),
+        });
+    };
+    let config = match store.get(&context.0.instance_id).await {
+        Ok(Some(config)) => config,
+        Ok(None) => {
+            warn!(
+                instance_id = %context.0.instance_id,
+                request_id = %context.0.request_id,
+                "gateway rejected trusted relay request without a persisted integration config"
+            );
+            return Err(crate::relay::collaboration::RelayIngressRejection {
+                status: http::StatusCode::SERVICE_UNAVAILABLE,
+                message: TRUSTED_RELAY_EXECUTION_UNAVAILABLE_DETAIL.to_string(),
+            });
+        }
+        Err(error) => {
+            warn!(
+                instance_id = %context.0.instance_id,
+                request_id = %context.0.request_id,
+                error = %error,
+                "gateway failed to load the trusted relay integration config"
+            );
+            return Err(crate::relay::collaboration::RelayIngressRejection {
+                status: http::StatusCode::SERVICE_UNAVAILABLE,
+                message: TRUSTED_RELAY_EXECUTION_UNAVAILABLE_DETAIL.to_string(),
+            });
+        }
+    };
+
+    if !config.enabled || config.execution_mode.trim() != "direct_channel" {
+        warn!(
+            instance_id = %context.0.instance_id,
+            request_id = %context.0.request_id,
+            enabled = config.enabled,
+            execution_mode = %config.execution_mode,
+            "gateway rejected trusted relay request because persisted integration execution is disabled"
+        );
+        return Err(crate::relay::collaboration::RelayIngressRejection {
+            status: http::StatusCode::SERVICE_UNAVAILABLE,
+            message: TRUSTED_RELAY_EXECUTION_UNAVAILABLE_DETAIL.to_string(),
+        });
+    }
+
+    let Some(route_profile) =
+        crate::routing::TrustedRelayRoutingProfile::new(&config.route_profile)
+    else {
+        warn!(
+            instance_id = %context.0.instance_id,
+            request_id = %context.0.request_id,
+            "gateway rejected trusted relay request with an empty persisted route profile"
+        );
+        return Err(crate::relay::collaboration::RelayIngressRejection {
+            status: http::StatusCode::SERVICE_UNAVAILABLE,
+            message: TRUSTED_RELAY_EXECUTION_UNAVAILABLE_DETAIL.to_string(),
+        });
+    };
+
+    Ok(Some(route_profile))
+}
+
+async fn resolve_relay_verifier_for_request(
+    state: &AppState,
+    headers: &http::HeaderMap,
+    bootstrap_verifier: Option<&crate::relay::collaboration::RelayVerifier>,
+) -> Result<
+    Option<crate::relay::collaboration::RelayVerifier>,
+    crate::relay::collaboration::RelayIngressRejection,
+> {
+    let required_headers = [
+        crate::relay::collaboration::HEADER_INSTANCE_ID,
+        crate::relay::collaboration::HEADER_RELAY_CONTEXT,
+        crate::relay::collaboration::HEADER_RELAY_SIGNATURE,
+    ];
+    if required_headers
+        .iter()
+        .any(|header| !headers.contains_key(*header))
+    {
+        return Ok(bootstrap_verifier.cloned());
+    }
+    let Some(instance_id) = headers
+        .get(crate::relay::collaboration::HEADER_INSTANCE_ID)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+    else {
+        return Ok(bootstrap_verifier.cloned());
+    };
+    let Some(store) = state.relay_integration_config_store() else {
+        warn!(
+            instance_id,
+            "gateway rejected relay authentication without a persisted credential store"
+        );
+        return Err(crate::relay::collaboration::RelayIngressRejection {
+            status: http::StatusCode::SERVICE_UNAVAILABLE,
+            message: PERSISTED_RELAY_CREDENTIALS_UNAVAILABLE_DETAIL.to_string(),
+        });
+    };
+    let credentials = match store.get_credentials(&instance_id).await {
+        Ok(credentials) => credentials,
+        Err(error) => {
+            warn!(
+                instance_id,
+                error = %error,
+                "gateway failed to load persisted relay credentials"
+            );
+            return Err(crate::relay::collaboration::RelayIngressRejection {
+                status: http::StatusCode::SERVICE_UNAVAILABLE,
+                message: PERSISTED_RELAY_CREDENTIALS_UNAVAILABLE_DETAIL.to_string(),
+            });
+        }
+    };
+    let Some(credentials) = credentials else {
+        if let Some(bootstrap_verifier) = bootstrap_verifier {
+            if !bootstrap_verifier.matches_instance_id(&instance_id) {
+                return Err(crate::relay::collaboration::RelayIngressRejection {
+                    status: http::StatusCode::UNAUTHORIZED,
+                    message: "Aether relay instance mismatch".to_string(),
+                });
+            }
+        }
+        return Ok(bootstrap_verifier.cloned());
+    };
+    let Some(encryption_key) = state
+        .data
+        .encryption_key()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        warn!(
+            instance_id,
+            "gateway rejected persisted relay credentials without an encryption key"
+        );
+        return Err(crate::relay::collaboration::RelayIngressRejection {
+            status: http::StatusCode::SERVICE_UNAVAILABLE,
+            message: PERSISTED_RELAY_CREDENTIALS_UNAVAILABLE_DETAIL.to_string(),
+        });
+    };
+    crate::relay::collaboration::RelayVerifier::from_persisted_credentials(
+        &credentials,
+        encryption_key,
+        state.runtime_state().clone(),
+        Utc::now().timestamp().max(0) as u64,
+    )
+    .map(Some)
+    .map_err(|_| {
+        warn!(
+            instance_id,
+            "gateway rejected unavailable or malformed persisted relay credentials"
+        );
+        crate::relay::collaboration::RelayIngressRejection {
+            status: http::StatusCode::SERVICE_UNAVAILABLE,
+            message: PERSISTED_RELAY_CREDENTIALS_UNAVAILABLE_DETAIL.to_string(),
+        }
+    })
+}
+
 fn finalize_request_body_buffer_rejection(
     state: &AppState,
     request_context: &GatewayPublicRequestContext,
@@ -204,114 +383,8 @@ fn execution_runtime_candidate_header_value(decision: &GatewayControlDecision) -
     }
 }
 
-fn extract_management_token_bearer(headers: &http::HeaderMap) -> Option<String> {
-    let header = crate::headers::header_value_str(headers, http::header::AUTHORIZATION.as_str())?;
-    let token = header
-        .strip_prefix("Bearer ")
-        .or_else(|| header.strip_prefix("bearer "))?
-        .trim()
-        .to_string();
-    (!token.is_empty()
-        && (token.starts_with(MANAGEMENT_TOKEN_PREFIX)
-            || token.starts_with(LEGACY_MANAGEMENT_TOKEN_PREFIX)))
-    .then_some(token)
-}
-
-fn hash_management_token(value: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(value.as_bytes());
-    format!("{:x}", hasher.finalize())
-}
-
-fn remote_ip_allowed(allowed_ips: Option<&serde_json::Value>, remote_ip: std::net::IpAddr) -> bool {
-    json_ip_rules_allow(allowed_ips, remote_ip)
-}
-
 fn api_key_remote_ip_allowed(ip_rules: Option<&[String]>, remote_ip: std::net::IpAddr) -> bool {
     ip_rules_allow(ip_rules, remote_ip)
-}
-
-async fn maybe_promote_management_token_admin_principal(
-    state: &AppState,
-    client_ip: std::net::IpAddr,
-    headers: &http::HeaderMap,
-    trace_id: &str,
-    request_context: &mut GatewayPublicRequestContext,
-) -> Result<(), GatewayError> {
-    let Some(decision) = request_context.control_decision.as_mut() else {
-        return Ok(());
-    };
-    if decision.route_class.as_deref() != Some("admin_proxy") || decision.admin_principal.is_some()
-    {
-        return Ok(());
-    }
-
-    let Some(token) = extract_management_token_bearer(headers) else {
-        return Ok(());
-    };
-    let token_hash = hash_management_token(&token);
-    let Some(token_with_user) = state
-        .get_management_token_with_user_by_hash(&token_hash)
-        .await?
-    else {
-        return Ok(());
-    };
-
-    if !token_with_user.token.is_active {
-        return Ok(());
-    }
-    if token_with_user
-        .token
-        .expires_at_unix_secs
-        .is_some_and(|value| value <= chrono::Utc::now().timestamp().max(0) as u64)
-    {
-        return Ok(());
-    }
-    if !remote_ip_allowed(token_with_user.token.allowed_ips.as_ref(), client_ip) {
-        return Ok(());
-    }
-    let Some(user) = state.find_user_auth_by_id(&token_with_user.user.id).await? else {
-        return Ok(());
-    };
-    if !user.is_active || user.is_deleted || !crate::roles::can_access_admin_console(&user.role) {
-        return Ok(());
-    }
-    let management_token_permissions = match management_token_permission_keys_from_value(
-        token_with_user.token.permissions.as_ref(),
-    ) {
-        Ok(value) => value,
-        Err(err) => {
-            warn!(
-                trace_id = %trace_id,
-                token_id = %token_with_user.token.id,
-                error = %err,
-                "gateway rejected management token with invalid permissions"
-            );
-            return Ok(());
-        }
-    };
-
-    decision.admin_principal = Some(crate::control::GatewayAdminPrincipalContext {
-        user_id: user.id.clone(),
-        user_role: user.role.clone(),
-        session_id: None,
-        management_token_id: Some(token_with_user.token.id.clone()),
-        management_token_permissions,
-    });
-
-    let remote_ip = client_ip.to_string();
-    if let Err(err) = state
-        .record_management_token_usage(&token_with_user.token.id, Some(remote_ip.as_str()))
-        .await
-    {
-        warn!(
-            trace_id = %trace_id,
-            token_id = %token_with_user.token.id,
-            error = ?err,
-            "gateway failed to record management token usage"
-        );
-    }
-    Ok(())
 }
 
 async fn maybe_forward_public_request_to_tunnel_owner(
@@ -321,6 +394,14 @@ async fn maybe_forward_public_request_to_tunnel_owner(
     parts: &http::request::Parts,
     buffered_body: Option<&Bytes>,
 ) -> Result<Option<Response<Body>>, GatewayError> {
+    if parts
+        .extensions
+        .get::<crate::relay::collaboration::TrustedRelayContext>()
+        .is_some()
+    {
+        return Ok(None);
+    }
+
     let Some(decision) = request_context.control_decision.as_ref() else {
         return Ok(None);
     };
@@ -994,7 +1075,113 @@ async fn proxy_request_inner(
             &parts.headers,
             &remote_addr,
         ));
-    let trace_id = extract_or_generate_trace_id(&parts.headers);
+    let mut trace_id = extract_or_generate_trace_id(&parts.headers);
+    if crate::relay::collaboration::has_relay_headers(&parts.headers) {
+        let Some(relay_engine) = state.relay_engine() else {
+            let response = build_local_http_error_response(
+                &trace_id,
+                None,
+                http::StatusCode::SERVICE_UNAVAILABLE,
+                "Aether relay is disabled",
+            )?;
+            return Ok(finalize_gateway_response(
+                &state,
+                response,
+                &trace_id,
+                &remote_addr,
+                &parts.method,
+                parts
+                    .uri
+                    .path_and_query()
+                    .map(|value| value.as_str())
+                    .unwrap_or("/"),
+                None,
+                EXECUTION_PATH_LOCAL_AUTH_DENIED,
+                &started_at,
+                request_permit.take(),
+            ));
+        };
+        let relay_routing_mode = relay_engine.routing_mode();
+        let bootstrap_verifier = relay_engine.relay_verifier().cloned();
+        let relay_verifier = match resolve_relay_verifier_for_request(
+            &state,
+            &parts.headers,
+            bootstrap_verifier.as_ref(),
+        )
+        .await
+        {
+            Ok(verifier) => verifier,
+            Err(rejection) => {
+                let response = build_local_http_error_response(
+                    &trace_id,
+                    None,
+                    rejection.status,
+                    &rejection.message,
+                )?;
+                return Ok(finalize_gateway_response(
+                    &state,
+                    response,
+                    &trace_id,
+                    &remote_addr,
+                    &parts.method,
+                    parts
+                        .uri
+                        .path_and_query()
+                        .map(|value| value.as_str())
+                        .unwrap_or("/"),
+                    None,
+                    EXECUTION_PATH_LOCAL_AUTH_DENIED,
+                    &started_at,
+                    request_permit.take(),
+                ));
+            }
+        };
+        if let Err(rejection) = crate::relay::collaboration::authenticate_relay_request(
+            relay_verifier.as_ref(),
+            relay_routing_mode,
+            &mut parts.headers,
+            &mut parts.extensions,
+        )
+        .await
+        {
+            let response = build_local_http_error_response(
+                &trace_id,
+                None,
+                rejection.status,
+                &rejection.message,
+            )?;
+            return Ok(finalize_gateway_response(
+                &state,
+                response,
+                &trace_id,
+                &remote_addr,
+                &parts.method,
+                parts
+                    .uri
+                    .path_and_query()
+                    .map(|value| value.as_str())
+                    .unwrap_or("/"),
+                None,
+                EXECUTION_PATH_LOCAL_AUTH_DENIED,
+                &started_at,
+                request_permit.take(),
+            ));
+        }
+
+        let trusted_request_id = parts
+            .extensions
+            .get::<crate::relay::collaboration::TrustedRelayContext>()
+            .expect("authenticated relay request must have trusted context")
+            .0
+            .request_id
+            .clone();
+        parts.headers.insert(
+            HeaderName::from_static(TRACE_ID_HEADER),
+            HeaderValue::from_str(&trusted_request_id)
+                .expect("authenticated relay request ID must be header-safe"),
+        );
+        trace_id = trusted_request_id;
+    }
     state.clear_local_execution_runtime_miss_diagnostic(&trace_id);
     if request_hits_execution_loop_guard(&parts) {
         warn!(
@@ -1042,7 +1229,7 @@ async fn proxy_request_inner(
         &trace_id,
     )
     .await?;
-    maybe_promote_management_token_admin_principal(
+    promote_management_token_admin_principal(
         &state,
         client_ip,
         &parts.headers,
@@ -1328,6 +1515,77 @@ async fn proxy_request_inner(
         None
     };
 
+    if let Some(rejection) = trusted_auth_local_rejection(control_decision, &parts.headers) {
+        let response =
+            build_local_auth_rejection_response(&trace_id, control_decision, &rejection)?;
+        return Ok(finalize_gateway_response_with_context(
+            &state,
+            response,
+            &remote_addr,
+            &request_context,
+            EXECUTION_PATH_LOCAL_AUTH_DENIED,
+            &started_at,
+            request_permit.take(),
+        ));
+    }
+
+    let relay_requested_model = control_decision.and_then(|decision| {
+        buffered_body.as_ref().and_then(|body| {
+            crate::control::extract_requested_model(decision, &parts.uri, &parts.headers, body)
+        })
+    });
+    if let Err(rejection) = crate::relay::collaboration::validate_trusted_relay_request(
+        parts
+            .extensions
+            .get::<crate::relay::collaboration::TrustedRelayContext>(),
+        relay_requested_model.as_deref(),
+        control_decision.and_then(|decision| decision.auth_endpoint_signature.as_deref()),
+    ) {
+        let response = build_local_http_error_response(
+            &trace_id,
+            control_decision,
+            rejection.status,
+            &rejection.message,
+        )?;
+        return Ok(finalize_gateway_response_with_context(
+            &state,
+            response,
+            &remote_addr,
+            &request_context,
+            EXECUTION_PATH_LOCAL_AUTH_DENIED,
+            &started_at,
+            request_permit.take(),
+        ));
+    }
+
+    let trusted_relay_context = parts
+        .extensions
+        .get::<crate::relay::collaboration::TrustedRelayContext>()
+        .cloned();
+    match trusted_relay_execution_profile(&state, trusted_relay_context.as_ref()).await {
+        Ok(Some(route_profile)) => {
+            parts.extensions.insert(route_profile);
+        }
+        Ok(None) => {}
+        Err(rejection) => {
+            let response = build_local_http_error_response(
+                &trace_id,
+                control_decision,
+                rejection.status,
+                &rejection.message,
+            )?;
+            return Ok(finalize_gateway_response_with_context(
+                &state,
+                response,
+                &remote_addr,
+                &request_context,
+                EXECUTION_PATH_LOCAL_AUTH_DENIED,
+                &started_at,
+                request_permit.take(),
+            ));
+        }
+    }
+
     let owner_forward_started_at = Instant::now();
     let owner_forward_response = maybe_forward_public_request_to_tunnel_owner(
         &state,
@@ -1348,20 +1606,6 @@ async fn proxy_request_inner(
             &remote_addr,
             &request_context,
             EXECUTION_PATH_TUNNEL_AFFINITY_FORWARD,
-            &started_at,
-            request_permit.take(),
-        ));
-    }
-
-    if let Some(rejection) = trusted_auth_local_rejection(control_decision, &parts.headers) {
-        let response =
-            build_local_auth_rejection_response(&trace_id, control_decision, &rejection)?;
-        return Ok(finalize_gateway_response_with_context(
-            &state,
-            response,
-            &remote_addr,
-            &request_context,
-            EXECUTION_PATH_LOCAL_AUTH_DENIED,
             &started_at,
             request_permit.take(),
         ));
@@ -2262,14 +2506,148 @@ mod tests {
     use super::{
         api_key_remote_ip_allowed, buffer_and_normalize_request_body,
         diagnostic_is_auth_api_key_concurrency_limited, local_execution_runtime_miss_detail,
-        restore_redacted_stream_execution_response, restore_redacted_sync_execution_response,
-        GatewayControlDecision, LocalExecutionRuntimeMissDiagnostic, RequestBodyBufferError,
-        RequestBodyBufferPolicy,
+        resolve_relay_verifier_for_request, restore_redacted_stream_execution_response,
+        restore_redacted_sync_execution_response, GatewayControlDecision,
+        LocalExecutionRuntimeMissDiagnostic, RequestBodyBufferError, RequestBodyBufferPolicy,
+        PERSISTED_RELAY_CREDENTIALS_UNAVAILABLE_DETAIL,
     };
+    use aether_crypto::{encrypt_python_fernet_plaintext, DEVELOPMENT_ENCRYPTION_KEY};
+    use aether_data::backend::SqliteBackend;
+    use aether_data::lifecycle::migrate::run_sqlite_migrations;
+    use aether_data::repository::integration_configs::{
+        IntegrationConfigStore, IntegrationConfigUpdate, IntegrationCredentialRotation,
+        OpaqueCredentialCiphertext,
+    };
+    use aether_data::{DatabaseDriver, SqlDatabaseConfig, SqlPoolConfig};
     use axum::body::{to_bytes, Body, Bytes};
     use axum::http::{header, HeaderMap, HeaderValue, Method, Response};
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine as _;
+    use chrono::Utc;
+    use hmac::{Hmac, Mac};
     use serde_json::json;
+    use sha2::Sha256;
     use tokio::sync::Semaphore;
+
+    use crate::data::GatewayDataConfig;
+    use crate::relay::collaboration::{
+        RelayVerification, RelayVerifier, HEADER_INSTANCE_ID, HEADER_RELAY_CONTEXT,
+        HEADER_RELAY_SIGNATURE,
+    };
+    use crate::state::AppState;
+
+    async fn persisted_relay_credentials_store_for_test(
+        malformed_relay_ciphertext: bool,
+    ) -> IntegrationConfigStore {
+        let backend = SqliteBackend::from_config(SqlDatabaseConfig {
+            driver: DatabaseDriver::Sqlite,
+            url: "sqlite::memory:".to_string(),
+            pool: SqlPoolConfig {
+                max_connections: 1,
+                ..SqlPoolConfig::default()
+            },
+        })
+        .expect("relay credential sqlite backend should build");
+        run_sqlite_migrations(backend.pool())
+            .await
+            .expect("relay credential sqlite migrations should run");
+
+        let store = IntegrationConfigStore::sqlite(backend.pool_clone());
+        let now_unix_ms = Utc::now().timestamp_millis();
+        store
+            .compare_and_set(
+                "aether-primary",
+                0,
+                &IntegrationConfigUpdate {
+                    route_profile: "balanced".to_string(),
+                    execution_mode: "direct_channel".to_string(),
+                    enabled: true,
+                    capability_version: "0.1.0".to_string(),
+                    updated_at_unix_ms: now_unix_ms,
+                },
+            )
+            .await
+            .expect("relay integration config should be inserted");
+        let relay_ciphertext = if malformed_relay_ciphertext {
+            "not-a-valid-fernet-ciphertext".to_string()
+        } else {
+            encrypt_python_fernet_plaintext(DEVELOPMENT_ENCRYPTION_KEY, "persisted-relay-secret")
+                .expect("relay credential should encrypt")
+        };
+        let rotation = IntegrationCredentialRotation::new(
+            OpaqueCredentialCiphertext::new(
+                encrypt_python_fernet_plaintext(
+                    DEVELOPMENT_ENCRYPTION_KEY,
+                    "persisted-control-secret",
+                )
+                .expect("control credential should encrypt"),
+            )
+            .expect("control ciphertext should be accepted"),
+            OpaqueCredentialCiphertext::new(relay_ciphertext)
+                .expect("relay ciphertext should be accepted"),
+            None,
+            false,
+            "persisted-relay-credential-test",
+            "a".repeat(64),
+        )
+        .expect("relay credential rotation should be accepted");
+        store
+            .compare_and_set_with_credential_rotation(
+                "aether-primary",
+                1,
+                &IntegrationConfigUpdate {
+                    route_profile: "balanced".to_string(),
+                    execution_mode: "direct_channel".to_string(),
+                    enabled: true,
+                    capability_version: "0.1.0".to_string(),
+                    updated_at_unix_ms: now_unix_ms + 1,
+                },
+                &rotation,
+            )
+            .await
+            .expect("relay credentials should persist atomically");
+        store
+    }
+
+    fn signed_relay_headers_for_test(secret: &str, request_id: &str) -> HeaderMap {
+        let context = serde_json::json!({
+            "instance_id": "aether-primary",
+            "request_id": request_id,
+            "subject_id": "subject-1",
+            "token_subject_id": "token-subject-1",
+            "channel_id": "41",
+            "group": "pro",
+            "model": "gpt-5",
+            "relay_format": "openai",
+            "config_revision": 2,
+            "expires_at": Utc::now().timestamp() + 30,
+        });
+        let encoded = URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&context).expect("relay context should serialize"));
+        let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
+            .expect("relay secret should initialize HMAC");
+        mac.update(encoded.as_bytes());
+        let signature = mac
+            .finalize()
+            .into_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HEADER_INSTANCE_ID,
+            HeaderValue::from_static("aether-primary"),
+        );
+        headers.insert(
+            HEADER_RELAY_CONTEXT,
+            HeaderValue::from_str(&encoded).expect("encoded relay context should be a header"),
+        );
+        headers.insert(
+            HEADER_RELAY_SIGNATURE,
+            HeaderValue::from_str(&signature).expect("relay signature should be a header"),
+        );
+        headers
+    }
 
     #[test]
     fn api_key_remote_ip_allows_unrestricted_keys() {
@@ -2595,6 +2973,78 @@ mod tests {
         assert_eq!(
             detail.as_deref(),
             Some("当前调用方 API Key 并发请求数已达上限，请稍后重试")
+        );
+    }
+
+    #[tokio::test]
+    async fn persisted_relay_credentials_override_static_bootstrap_verifier() {
+        let store = persisted_relay_credentials_store_for_test(false).await;
+        let state = AppState::new()
+            .expect("gateway state should build")
+            .with_data_config(
+                GatewayDataConfig::disabled().with_encryption_key(DEVELOPMENT_ENCRYPTION_KEY),
+            )
+            .expect("gateway data config should build")
+            .with_relay_integration_config_store_for_tests(store);
+        let bootstrap_verifier = RelayVerifier::new(
+            "bootstrap-relay-secret".to_string(),
+            "aether-primary".to_string(),
+            state.runtime_state().clone(),
+        );
+        let persisted_headers =
+            signed_relay_headers_for_test("persisted-relay-secret", "persisted-relay-request");
+
+        let verifier = resolve_relay_verifier_for_request(
+            &state,
+            &persisted_headers,
+            Some(&bootstrap_verifier),
+        )
+        .await
+        .expect("persisted relay credentials should resolve")
+        .expect("persisted relay credentials should create a verifier");
+        assert!(matches!(
+            verifier.verify(&persisted_headers).await,
+            RelayVerification::Valid(_)
+        ));
+
+        let bootstrap_headers =
+            signed_relay_headers_for_test("bootstrap-relay-secret", "bootstrap-relay-request");
+        assert!(matches!(
+            verifier.verify(&bootstrap_headers).await,
+            RelayVerification::InvalidSignature(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn malformed_persisted_relay_credentials_fail_closed_without_bootstrap_fallback() {
+        let store = persisted_relay_credentials_store_for_test(true).await;
+        let state = AppState::new()
+            .expect("gateway state should build")
+            .with_data_config(
+                GatewayDataConfig::disabled().with_encryption_key(DEVELOPMENT_ENCRYPTION_KEY),
+            )
+            .expect("gateway data config should build")
+            .with_relay_integration_config_store_for_tests(store);
+        let bootstrap_verifier = RelayVerifier::new(
+            "bootstrap-relay-secret".to_string(),
+            "aether-primary".to_string(),
+            state.runtime_state().clone(),
+        );
+        let bootstrap_headers =
+            signed_relay_headers_for_test("bootstrap-relay-secret", "malformed-persisted-row");
+
+        let result = resolve_relay_verifier_for_request(
+            &state,
+            &bootstrap_headers,
+            Some(&bootstrap_verifier),
+        )
+        .await;
+        assert!(result.is_err());
+        let rejection = result.err().expect("malformed credentials should reject");
+        assert_eq!(rejection.status, http::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            rejection.message,
+            PERSISTED_RELAY_CREDENTIALS_UNAVAILABLE_DETAIL
         );
     }
 }

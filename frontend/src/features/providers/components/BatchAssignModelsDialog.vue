@@ -183,10 +183,8 @@ import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import { parseApiError } from '@/utils/errorParser'
 import { useUpstreamModelsCache } from '../composables/useUpstreamModelsCache'
-import {
-  getGlobalModels,
-  type GlobalModelResponse
-} from '@/api/endpoints/global-models'
+import { getGlobalModels } from '@/api/endpoints/global-models'
+import type { GlobalModelResponse } from '@/api/endpoints/types'
 import {
   getProviderModels,
   getProviderKeys,
