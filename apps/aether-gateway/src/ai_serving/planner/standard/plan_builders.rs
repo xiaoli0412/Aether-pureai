@@ -156,6 +156,7 @@ pub(crate) fn build_standard_stream_plan_from_decision(
         &provider_request_headers,
         &provider_request_body_value,
     )?;
+    let stream = payload.upstream_is_stream;
     let plan = build_ai_execution_plan_from_decision(
         &mut payload,
         AiExecutionPlanFromDecisionParts {
@@ -165,7 +166,7 @@ pub(crate) fn build_standard_stream_plan_from_decision(
             headers: std::mem::take(&mut provider_request_headers),
             content_type,
             body: RequestBody::from_json(provider_request_body_value),
-            stream: true,
+            stream,
         },
     );
 
@@ -224,6 +225,7 @@ mod tests {
             request_id: Some("gateway-generated-request-id".to_string()),
             candidate_id: Some("candidate-1".to_string()),
             provider_name: Some("provider".to_string()),
+            provider_type: Some("custom".to_string()),
             provider_id: Some("provider-1".to_string()),
             endpoint_id: Some("endpoint-1".to_string()),
             key_id: Some("key-1".to_string()),

@@ -80,6 +80,7 @@ pub(crate) fn build_passthrough_stream_plan_from_decision(
         .content_type
         .take()
         .or_else(|| provider_request_headers.get("content-type").cloned());
+    let stream = payload.upstream_is_stream;
     let plan = build_ai_execution_plan_from_decision(
         &mut payload,
         AiExecutionPlanFromDecisionParts {
@@ -93,7 +94,7 @@ pub(crate) fn build_passthrough_stream_plan_from_decision(
                 body_bytes_b64: None,
                 body_ref: None,
             },
-            stream: true,
+            stream,
         },
     );
     let mut report_context = payload.report_context;
@@ -116,7 +117,9 @@ mod tests {
     use axum::http::Request;
     use serde_json::json;
 
-    use super::{build_passthrough_stream_plan_from_decision, build_passthrough_sync_plan_from_decision};
+    use super::{
+        build_passthrough_stream_plan_from_decision, build_passthrough_sync_plan_from_decision,
+    };
     use crate::relay::collaboration::{
         RelayContext, TrustedRelayContext, HEADER_ONEAPI_REQUEST_ID,
     };
@@ -153,6 +156,7 @@ mod tests {
             request_id: Some("gateway-generated-request-id".to_string()),
             candidate_id: Some("candidate-1".to_string()),
             provider_name: Some("provider".to_string()),
+            provider_type: Some("custom".to_string()),
             provider_id: Some("provider-1".to_string()),
             endpoint_id: Some("endpoint-1".to_string()),
             key_id: Some("key-1".to_string()),
@@ -195,12 +199,10 @@ mod tests {
     fn passthrough_openai_plans_propagate_the_trusted_relay_request_id() {
         let parts = trusted_relay_parts();
 
-        let sync = build_passthrough_sync_plan_from_decision(
-            &parts,
-            passthrough_payload("openai:image"),
-        )
-        .expect("sync plan should build")
-        .expect("sync plan should be present");
+        let sync =
+            build_passthrough_sync_plan_from_decision(&parts, passthrough_payload("openai:image"))
+                .expect("sync plan should build")
+                .expect("sync plan should be present");
         assert_eq!(
             sync.plan
                 .headers
