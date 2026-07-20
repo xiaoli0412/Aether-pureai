@@ -1103,12 +1103,10 @@ mod tests {
                     expires_at: 0,
                 },
             ));
-        parts
-            .extensions
-            .insert(
-                crate::routing::TrustedRelayRoutingProfile::new("balanced")
-                    .expect("trusted relay route profile should build"),
-            );
+        parts.extensions.insert(
+            crate::routing::TrustedRelayRoutingProfile::new("balanced")
+                .expect("trusted relay route profile should build"),
+        );
 
         assert_eq!(explicit_routing_group(&parts).as_deref(), Some("balanced"));
         assert_eq!(

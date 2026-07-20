@@ -865,8 +865,10 @@ mod tests {
         let _control_previous_expires =
             EnvVarGuard::set("AETHER_CONTROL_SECRET_PREVIOUS_EXPIRES_AT", "1");
         let _relay_secret = EnvVarGuard::set("AETHER_RELAY_SIGNING_SECRET", "relay-only-token");
-        let _relay_previous =
-            EnvVarGuard::set("AETHER_RELAY_SIGNING_SECRET_PREVIOUS", "relay-previous-token");
+        let _relay_previous = EnvVarGuard::set(
+            "AETHER_RELAY_SIGNING_SECRET_PREVIOUS",
+            "relay-previous-token",
+        );
         let _relay_previous_expires =
             EnvVarGuard::set("AETHER_RELAY_SIGNING_SECRET_PREVIOUS_EXPIRES_AT", "1");
         let mut headers = HeaderMap::new();
@@ -880,10 +882,7 @@ mod tests {
         );
         assert!(!super::is_authorized_export_request(&headers));
 
-        headers.insert(
-            "authorization",
-            "Bearer relay-only-token".parse().unwrap(),
-        );
+        headers.insert("authorization", "Bearer relay-only-token".parse().unwrap());
         assert!(!super::is_authorized_export_request(&headers));
 
         headers.insert("authorization", "Bearer export-token".parse().unwrap());

@@ -313,15 +313,12 @@ impl RelayEventInboxStore {
         let inserted = match &self.backend {
             RelayEventInboxBackend::Postgres(pool) => {
                 let mut tx = pool.begin().await.map_err(DataLayerError::sql)?;
-                let claimed = claim_postgres_cursor(
-                    &mut tx,
-                    instance_id,
-                    expected_cursor,
-                    next_cursor,
-                )
-                .await?;
+                let claimed =
+                    claim_postgres_cursor(&mut tx, instance_id, expected_cursor, next_cursor)
+                        .await?;
                 if !claimed {
-                    let current_cursor = postgres_cursor_in_transaction(&mut tx, instance_id).await?;
+                    let current_cursor =
+                        postgres_cursor_in_transaction(&mut tx, instance_id).await?;
                     if current_cursor != expected_cursor || expected_cursor != next_cursor {
                         tx.rollback().await.map_err(DataLayerError::sql)?;
                         return Ok(RelayEventPersistOutcome::CursorConflict { current_cursor });
@@ -333,13 +330,8 @@ impl RelayEventInboxStore {
             }
             RelayEventInboxBackend::Mysql(pool) => {
                 let mut tx = pool.begin().await.map_err(DataLayerError::sql)?;
-                let claimed = claim_mysql_cursor(
-                    &mut tx,
-                    instance_id,
-                    expected_cursor,
-                    next_cursor,
-                )
-                .await?;
+                let claimed =
+                    claim_mysql_cursor(&mut tx, instance_id, expected_cursor, next_cursor).await?;
                 if !claimed {
                     let current_cursor = mysql_cursor_in_transaction(&mut tx, instance_id).await?;
                     tx.rollback().await.map_err(DataLayerError::sql)?;
@@ -351,13 +343,8 @@ impl RelayEventInboxStore {
             }
             RelayEventInboxBackend::Sqlite(pool) => {
                 let mut tx = pool.begin().await.map_err(DataLayerError::sql)?;
-                let claimed = claim_sqlite_cursor(
-                    &mut tx,
-                    instance_id,
-                    expected_cursor,
-                    next_cursor,
-                )
-                .await?;
+                let claimed =
+                    claim_sqlite_cursor(&mut tx, instance_id, expected_cursor, next_cursor).await?;
                 if !claimed {
                     let current_cursor = sqlite_cursor_in_transaction(&mut tx, instance_id).await?;
                     if current_cursor != expected_cursor || expected_cursor != next_cursor {
@@ -901,14 +888,12 @@ async fn postgres_cursor_in_transaction(
     tx: &mut Transaction<'_, Postgres>,
     instance_id: &str,
 ) -> Result<String, DataLayerError> {
-    sqlx::query_scalar::<_, String>(
-        "SELECT cursor FROM relay_event_cursors WHERE instance_id = $1",
-    )
-    .bind(instance_id)
-    .fetch_optional(&mut **tx)
-    .await
-    .map(|cursor| cursor.unwrap_or_default())
-    .map_err(DataLayerError::sql)
+    sqlx::query_scalar::<_, String>("SELECT cursor FROM relay_event_cursors WHERE instance_id = $1")
+        .bind(instance_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map(|cursor| cursor.unwrap_or_default())
+        .map_err(DataLayerError::sql)
 }
 
 async fn mysql_cursor_in_transaction(
@@ -916,22 +901,20 @@ async fn mysql_cursor_in_transaction(
     instance_id: &str,
 ) -> Result<String, DataLayerError> {
     mysql_cursor_for_update(tx, instance_id)
-    .await
-    .map(|cursor| cursor.unwrap_or_default())
+        .await
+        .map(|cursor| cursor.unwrap_or_default())
 }
 
 async fn sqlite_cursor_in_transaction(
     tx: &mut Transaction<'_, Sqlite>,
     instance_id: &str,
 ) -> Result<String, DataLayerError> {
-    sqlx::query_scalar::<_, String>(
-        "SELECT cursor FROM relay_event_cursors WHERE instance_id = ?",
-    )
-    .bind(instance_id)
-    .fetch_optional(&mut **tx)
-    .await
-    .map(|cursor| cursor.unwrap_or_default())
-    .map_err(DataLayerError::sql)
+    sqlx::query_scalar::<_, String>("SELECT cursor FROM relay_event_cursors WHERE instance_id = ?")
+        .bind(instance_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map(|cursor| cursor.unwrap_or_default())
+        .map_err(DataLayerError::sql)
 }
 
 fn initial_profit_status(event_type: &str) -> &'static str {
@@ -1290,7 +1273,12 @@ mod tests {
     async fn cursor_advances_only_after_the_entire_batch_is_persisted() {
         let store = test_store().await;
         store
-            .persist_batch("aether-primary", "", &[event("1", "usage_settled")], "cursor:1")
+            .persist_batch(
+                "aether-primary",
+                "",
+                &[event("1", "usage_settled")],
+                "cursor:1",
+            )
             .await
             .expect("first batch should persist");
 
@@ -1416,36 +1404,30 @@ mod tests {
             "each fresh event should have exactly one durable inbox record"
         );
 
-        assert!(
-            first_ledger
-                .append(&profit_record("profit-1", "aether-primary", "request-1"))
-                .await
-                .expect("the first profit record should persist")
-        );
-        assert!(
-            second_ledger
-                .append(&profit_record("profit-2", "aether-primary", "request-2"))
-                .await
-                .expect("the second profit record should persist")
-        );
-        assert!(
-            !second_ledger
-                .append(&profit_record("profit-1-retry", "aether-primary", "request-1"))
-                .await
-                .expect("the duplicate profit record should be idempotent")
-        );
-        assert!(
-            first_store
-                .mark_profit_recorded("aether-primary", "event-1")
-                .await
-                .expect("first marker should observe its ledger record")
-        );
-        assert!(
-            second_store
-                .mark_profit_recorded("aether-primary", "event-2")
-                .await
-                .expect("second marker should observe its ledger record")
-        );
+        assert!(first_ledger
+            .append(&profit_record("profit-1", "aether-primary", "request-1"))
+            .await
+            .expect("the first profit record should persist"));
+        assert!(second_ledger
+            .append(&profit_record("profit-2", "aether-primary", "request-2"))
+            .await
+            .expect("the second profit record should persist"));
+        assert!(!second_ledger
+            .append(&profit_record(
+                "profit-1-retry",
+                "aether-primary",
+                "request-1"
+            ))
+            .await
+            .expect("the duplicate profit record should be idempotent"));
+        assert!(first_store
+            .mark_profit_recorded("aether-primary", "event-1")
+            .await
+            .expect("first marker should observe its ledger record"));
+        assert!(second_store
+            .mark_profit_recorded("aether-primary", "event-2")
+            .await
+            .expect("second marker should observe its ledger record"));
         assert_eq!(
             first_ledger
                 .list_for_filter(&RelayProfitLedgerFilter {
@@ -1483,7 +1465,12 @@ mod tests {
         let store = test_store().await;
         let event = usage_event("usage-without-ledger", "request-without-ledger");
         store
-            .persist_batch("aether-primary", "", &[event], "cursor:usage-without-ledger")
+            .persist_batch(
+                "aether-primary",
+                "",
+                &[event],
+                "cursor:usage-without-ledger",
+            )
             .await
             .expect("pending usage event should persist");
 

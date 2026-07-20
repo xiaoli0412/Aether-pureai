@@ -4,9 +4,7 @@
 
 use std::sync::Arc;
 
-use aether_data::repository::relay_profit::{
-    PersistedRelayProfitRecord, RelayCostConfidence,
-};
+use aether_data::repository::relay_profit::{PersistedRelayProfitRecord, RelayCostConfidence};
 use aether_data_contracts::repository::usage::StoredRequestUsageAudit;
 use aether_relay_core::pricing::try_quota_to_usd;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -164,7 +162,9 @@ fn parse_decimal(value: &str, field: &str) -> Result<f64, RelayError> {
         )));
     }
     let parsed = value.parse::<f64>().map_err(|_| {
-        RelayError::Internal(format!("New API usage_settled {field} cannot be represented"))
+        RelayError::Internal(format!(
+            "New API usage_settled {field} cannot be represented"
+        ))
     })?;
     if !parsed.is_finite() {
         return Err(RelayError::Internal(format!(
@@ -179,8 +179,7 @@ fn canonicalize_computed_money(value: f64) -> f64 {
         return value;
     }
 
-    let canonical =
-        (value * COMPUTED_MONEY_DECIMAL_SCALE).round() / COMPUTED_MONEY_DECIMAL_SCALE;
+    let canonical = (value * COMPUTED_MONEY_DECIMAL_SCALE).round() / COMPUTED_MONEY_DECIMAL_SCALE;
     if canonical == 0.0 {
         0.0
     } else {
@@ -229,9 +228,7 @@ impl ProfitLedgerWork {
 }
 
 impl ProfitLedgerWriter {
-    pub fn new(
-        _config: Arc<RelayEngineConfig>,
-    ) -> (Self, mpsc::Receiver<ProfitLedgerWork>) {
+    pub fn new(_config: Arc<RelayEngineConfig>) -> (Self, mpsc::Receiver<ProfitLedgerWork>) {
         let (sender, receiver) = mpsc::channel(4096);
         let writer = Self { sender };
         (writer, receiver)
@@ -331,9 +328,7 @@ async fn persist_profit_record(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        build_persisted_profit_record, NewApiUsageSettlement, ProfitPersistenceOutcome,
-    };
+    use super::{build_persisted_profit_record, NewApiUsageSettlement, ProfitPersistenceOutcome};
     use aether_data::repository::relay_profit::RelayCostConfidence;
     use aether_data_contracts::repository::usage::StoredRequestUsageAudit;
     use std::time::Duration;

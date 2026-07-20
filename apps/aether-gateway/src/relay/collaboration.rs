@@ -223,13 +223,13 @@ pub struct RouteAdvice {
 /// 入站请求验证器
 #[derive(Clone)]
 pub struct RelayVerifier {
-	/// relay signing secret（预共享，用于 HMAC-SHA256）
-	signing_secret: Arc<String>,
-	/// 仅在明确的过渡截止时间前有效的上一把 relay signing secret。
-	previous_signing_secret: Option<Arc<String>>,
-	previous_signing_secret_expires_at: Option<u64>,
-	/// 本实例 ID
-	instance_id: Arc<String>,
+    /// relay signing secret（预共享，用于 HMAC-SHA256）
+    signing_secret: Arc<String>,
+    /// 仅在明确的过渡截止时间前有效的上一把 relay signing secret。
+    previous_signing_secret: Option<Arc<String>>,
+    previous_signing_secret_expires_at: Option<u64>,
+    /// 本实例 ID
+    instance_id: Arc<String>,
     replay_guard: Arc<dyn ReplayGuard>,
 }
 
@@ -255,9 +255,9 @@ impl ReplayGuard for RuntimeReplayGuard {
 }
 
 impl RelayVerifier {
-	pub fn new(signing_secret: String, instance_id: String, runtime_state: RuntimeState) -> Self {
-		Self::new_with_transition_secret(signing_secret, None, None, instance_id, runtime_state)
-	}
+    pub fn new(signing_secret: String, instance_id: String, runtime_state: RuntimeState) -> Self {
+        Self::new_with_transition_secret(signing_secret, None, None, instance_id, runtime_state)
+    }
 
     pub(crate) fn matches_instance_id(&self, instance_id: &str) -> bool {
         self.instance_id.as_str() == instance_id
@@ -320,86 +320,89 @@ impl RelayVerifier {
         ))
     }
 
-	fn new_with_transition_secret(
-		signing_secret: String,
-		previous_signing_secret: Option<String>,
-		previous_signing_secret_expires_at: Option<u64>,
-		instance_id: String,
-		runtime_state: RuntimeState,
-	) -> Self {
-		Self {
-			signing_secret: Arc::new(signing_secret),
-			previous_signing_secret: previous_signing_secret
-				.filter(|secret| !secret.trim().is_empty())
-				.map(Arc::new),
-			previous_signing_secret_expires_at,
-			instance_id: Arc::new(instance_id),
-			replay_guard: Arc::new(RuntimeReplayGuard { runtime_state }),
-		}
-	}
-
-	#[cfg(test)]
-	pub fn new_with_previous(
-		signing_secret: String,
-		previous_signing_secret: Option<String>,
-		instance_id: String,
-		runtime_state: RuntimeState,
-	) -> Self {
-		Self::new_with_transition_secret(
-			signing_secret,
-			previous_signing_secret,
-			Some(u64::MAX),
-			instance_id,
-			runtime_state,
-		)
-	}
+    fn new_with_transition_secret(
+        signing_secret: String,
+        previous_signing_secret: Option<String>,
+        previous_signing_secret_expires_at: Option<u64>,
+        instance_id: String,
+        runtime_state: RuntimeState,
+    ) -> Self {
+        Self {
+            signing_secret: Arc::new(signing_secret),
+            previous_signing_secret: previous_signing_secret
+                .filter(|secret| !secret.trim().is_empty())
+                .map(Arc::new),
+            previous_signing_secret_expires_at,
+            instance_id: Arc::new(instance_id),
+            replay_guard: Arc::new(RuntimeReplayGuard { runtime_state }),
+        }
+    }
 
     #[cfg(test)]
-	pub fn new_with_replay_guard(
-		signing_secret: String,
-		instance_id: String,
-		replay_guard: Arc<dyn ReplayGuard>,
-	) -> Self {
-		Self {
-			signing_secret: Arc::new(signing_secret),
-			previous_signing_secret: None,
-			previous_signing_secret_expires_at: None,
-			instance_id: Arc::new(instance_id),
-			replay_guard,
-		}
+    pub fn new_with_previous(
+        signing_secret: String,
+        previous_signing_secret: Option<String>,
+        instance_id: String,
+        runtime_state: RuntimeState,
+    ) -> Self {
+        Self::new_with_transition_secret(
+            signing_secret,
+            previous_signing_secret,
+            Some(u64::MAX),
+            instance_id,
+            runtime_state,
+        )
+    }
+
+    #[cfg(test)]
+    pub fn new_with_replay_guard(
+        signing_secret: String,
+        instance_id: String,
+        replay_guard: Arc<dyn ReplayGuard>,
+    ) -> Self {
+        Self {
+            signing_secret: Arc::new(signing_secret),
+            previous_signing_secret: None,
+            previous_signing_secret_expires_at: None,
+            instance_id: Arc::new(instance_id),
+            replay_guard,
+        }
     }
 
     /// 从环境变量构造
-	pub fn from_env(runtime_state: RuntimeState) -> Option<Self> {
-		let secret = non_empty_environment_secret("AETHER_RELAY_SIGNING_SECRET")?;
-		let previous_secret = non_empty_environment_secret("AETHER_RELAY_SIGNING_SECRET_PREVIOUS");
-		let previous_expires_at = environment_expiry("AETHER_RELAY_SIGNING_SECRET_PREVIOUS_EXPIRES_AT");
-		let control_secret = non_empty_environment_secret("AETHER_CONTROL_SECRET");
-		let previous_control_secret = non_empty_environment_secret("AETHER_CONTROL_SECRET_PREVIOUS");
-		let previous_control_expires_at = environment_expiry("AETHER_CONTROL_SECRET_PREVIOUS_EXPIRES_AT");
-		if active_credential_domains_overlap(
-			&secret,
-			previous_secret.as_deref(),
-			previous_expires_at,
-			control_secret.as_deref(),
-			previous_control_secret.as_deref(),
-			previous_control_expires_at,
-		) {
-			return None;
-		}
-		if non_empty_environment_secret("AETHER_OUTBOUND_EXPORT_TOKEN")
-			.is_some_and(|token| !outbound_export_token_is_isolated(&token))
-		{
-			return None;
-		}
-		let instance_id = non_empty_environment_secret("AETHER_INSTANCE_ID")?;
-		Some(Self::new_with_transition_secret(
-			secret,
-			previous_secret,
-			previous_expires_at,
-			instance_id,
-			runtime_state,
-		))
+    pub fn from_env(runtime_state: RuntimeState) -> Option<Self> {
+        let secret = non_empty_environment_secret("AETHER_RELAY_SIGNING_SECRET")?;
+        let previous_secret = non_empty_environment_secret("AETHER_RELAY_SIGNING_SECRET_PREVIOUS");
+        let previous_expires_at =
+            environment_expiry("AETHER_RELAY_SIGNING_SECRET_PREVIOUS_EXPIRES_AT");
+        let control_secret = non_empty_environment_secret("AETHER_CONTROL_SECRET");
+        let previous_control_secret =
+            non_empty_environment_secret("AETHER_CONTROL_SECRET_PREVIOUS");
+        let previous_control_expires_at =
+            environment_expiry("AETHER_CONTROL_SECRET_PREVIOUS_EXPIRES_AT");
+        if active_credential_domains_overlap(
+            &secret,
+            previous_secret.as_deref(),
+            previous_expires_at,
+            control_secret.as_deref(),
+            previous_control_secret.as_deref(),
+            previous_control_expires_at,
+        ) {
+            return None;
+        }
+        if non_empty_environment_secret("AETHER_OUTBOUND_EXPORT_TOKEN")
+            .is_some_and(|token| !outbound_export_token_is_isolated(&token))
+        {
+            return None;
+        }
+        let instance_id = non_empty_environment_secret("AETHER_INSTANCE_ID")?;
+        Some(Self::new_with_transition_secret(
+            secret,
+            previous_secret,
+            previous_expires_at,
+            instance_id,
+            runtime_state,
+        ))
     }
 
     /// 验证入站请求的完整性
@@ -412,11 +415,11 @@ impl RelayVerifier {
     /// 5. 校验 instance_id 一致
     /// 6. 校验 expires_at 在 30 秒内
     /// 7. 校验 request_id 未被重放
-	pub async fn verify(&self, headers: &HeaderMap) -> RelayVerification {
-		if self.signing_secret.trim().is_empty() {
-			return RelayVerification::InvalidSignature("invalid signing secret".to_string());
-		}
-		let now_secs = Utc::now().timestamp() as u64;
+    pub async fn verify(&self, headers: &HeaderMap) -> RelayVerification {
+        if self.signing_secret.trim().is_empty() {
+            return RelayVerification::InvalidSignature("invalid signing secret".to_string());
+        }
+        let now_secs = Utc::now().timestamp() as u64;
 
         // 1. Extract headers
         let header_instance_id = match extract_header_str(headers, HEADER_INSTANCE_ID) {
@@ -447,26 +450,28 @@ impl RelayVerifier {
         };
 
         // 2. Verify HMAC-SHA256 of the base64url-encoded context string
-		let transition_secret = self
-			.previous_signing_secret
-			.as_deref()
-			.filter(|_| {
-				self.previous_signing_secret_expires_at
-					.is_some_and(|expires_at| expires_at > now_secs)
-			})
-			.map(String::as_str);
-		let mut signature_matches = false;
-		for signing_secret in std::iter::once(self.signing_secret.as_str()).chain(transition_secret) {
-			let mut mac = match HmacSha256::new_from_slice(signing_secret.as_bytes()) {
-				Ok(mac) => mac,
-				Err(_) => continue,
-			};
-			mac.update(context_b64.as_bytes());
-			let expected_sig = hex_encode(&mac.finalize().into_bytes());
-			signature_matches |= constant_time_eq(signature_hex.as_bytes(), expected_sig.as_bytes());
-		}
+        let transition_secret = self
+            .previous_signing_secret
+            .as_deref()
+            .filter(|_| {
+                self.previous_signing_secret_expires_at
+                    .is_some_and(|expires_at| expires_at > now_secs)
+            })
+            .map(String::as_str);
+        let mut signature_matches = false;
+        for signing_secret in std::iter::once(self.signing_secret.as_str()).chain(transition_secret)
+        {
+            let mut mac = match HmacSha256::new_from_slice(signing_secret.as_bytes()) {
+                Ok(mac) => mac,
+                Err(_) => continue,
+            };
+            mac.update(context_b64.as_bytes());
+            let expected_sig = hex_encode(&mac.finalize().into_bytes());
+            signature_matches |=
+                constant_time_eq(signature_hex.as_bytes(), expected_sig.as_bytes());
+        }
 
-		if !signature_matches {
+        if !signature_matches {
             warn!(
                 header_instance_id = %header_instance_id,
                 "relay signature verification failed"
@@ -526,7 +531,7 @@ impl RelayVerifier {
         }
 
         // 6. Check expiration (30 second window)
-		if context.expires_at < now_secs {
+        if context.expires_at < now_secs {
             return RelayVerification::Expired {
                 request_id: context.request_id.clone(),
                 expired_at: context.expires_at,
@@ -793,17 +798,13 @@ pub(crate) fn verify_control_signature_v2(
         return ControlSignatureV2Verification::NotPresent;
     }
 
-    let version = match required_control_signature_v2_header(
-        headers,
-        HEADER_CONTROL_SIGNATURE_VERSION,
-    ) {
-        Ok(value) => value,
-        Err(error) => return ControlSignatureV2Verification::Invalid(error),
-    };
+    let version =
+        match required_control_signature_v2_header(headers, HEADER_CONTROL_SIGNATURE_VERSION) {
+            Ok(value) => value,
+            Err(error) => return ControlSignatureV2Verification::Invalid(error),
+        };
     if version != CONTROL_SIGNATURE_V2_VERSION {
-        return ControlSignatureV2Verification::Invalid(
-            ControlSignatureV2Failure::InvalidVersion,
-        );
+        return ControlSignatureV2Verification::Invalid(ControlSignatureV2Failure::InvalidVersion);
     }
 
     let instance_id = match required_control_signature_v2_header(headers, HEADER_INSTANCE_ID) {
@@ -829,9 +830,7 @@ pub(crate) fn verify_control_signature_v2(
     };
 
     if !is_canonical_control_signature_v2_method(method.as_str()) {
-        return ControlSignatureV2Verification::Invalid(
-            ControlSignatureV2Failure::InvalidMethod,
-        );
+        return ControlSignatureV2Verification::Invalid(ControlSignatureV2Failure::InvalidMethod);
     }
     if uri.path().is_empty() || !uri.path().starts_with('/') {
         return ControlSignatureV2Verification::Invalid(ControlSignatureV2Failure::InvalidPath);
@@ -852,9 +851,7 @@ pub(crate) fn verify_control_signature_v2(
         );
     }
     if !is_valid_control_signature_v2_nonce(nonce) {
-        return ControlSignatureV2Verification::Invalid(
-            ControlSignatureV2Failure::InvalidNonce,
-        );
+        return ControlSignatureV2Verification::Invalid(ControlSignatureV2Failure::InvalidNonce);
     }
     if decode_lower_hex_32(body_digest).is_none()
         || !constant_time_eq(
@@ -977,85 +974,94 @@ fn lower_hex_value(byte: u8) -> Option<u8> {
 /// 控制面凭据验证器（用于 /api/integrations/ 端点）
 #[derive(Clone)]
 pub struct ControlCredentialVerifier {
-	/// 控制凭据（独立于 relay signing secret）
-	control_secret: Arc<String>,
-	previous_control_secret: Option<Arc<String>>,
-	previous_control_secret_expires_at: Option<u64>,
+    /// 控制凭据（独立于 relay signing secret）
+    control_secret: Arc<String>,
+    previous_control_secret: Option<Arc<String>>,
+    previous_control_secret_expires_at: Option<u64>,
 }
 
 impl ControlCredentialVerifier {
-	pub fn new(control_secret: String) -> Self {
-		Self::new_with_transition_secret(control_secret, None, None)
-	}
+    pub fn new(control_secret: String) -> Self {
+        Self::new_with_transition_secret(control_secret, None, None)
+    }
 
-	fn new_with_transition_secret(
-		control_secret: String,
-		previous_control_secret: Option<String>,
-		previous_control_secret_expires_at: Option<u64>,
-	) -> Self {
-		Self {
-			control_secret: Arc::new(control_secret),
-			previous_control_secret: previous_control_secret
-				.filter(|secret| !secret.trim().is_empty())
-				.map(Arc::new),
-			previous_control_secret_expires_at,
-		}
-	}
+    fn new_with_transition_secret(
+        control_secret: String,
+        previous_control_secret: Option<String>,
+        previous_control_secret_expires_at: Option<u64>,
+    ) -> Self {
+        Self {
+            control_secret: Arc::new(control_secret),
+            previous_control_secret: previous_control_secret
+                .filter(|secret| !secret.trim().is_empty())
+                .map(Arc::new),
+            previous_control_secret_expires_at,
+        }
+    }
 
-	#[cfg(test)]
-	pub fn new_with_previous(control_secret: String, previous_control_secret: Option<String>) -> Self {
-		Self::new_with_transition_secret(control_secret, previous_control_secret, Some(u64::MAX))
-	}
+    #[cfg(test)]
+    pub fn new_with_previous(
+        control_secret: String,
+        previous_control_secret: Option<String>,
+    ) -> Self {
+        Self::new_with_transition_secret(control_secret, previous_control_secret, Some(u64::MAX))
+    }
 
-	pub fn from_env() -> Option<Self> {
-		let secret = non_empty_environment_secret("AETHER_CONTROL_SECRET")?;
-		let previous_secret = non_empty_environment_secret("AETHER_CONTROL_SECRET_PREVIOUS");
-		let previous_expires_at = environment_expiry("AETHER_CONTROL_SECRET_PREVIOUS_EXPIRES_AT");
-		let relay_secret = non_empty_environment_secret("AETHER_RELAY_SIGNING_SECRET");
-		let previous_relay_secret = non_empty_environment_secret("AETHER_RELAY_SIGNING_SECRET_PREVIOUS");
-		let previous_relay_expires_at = environment_expiry("AETHER_RELAY_SIGNING_SECRET_PREVIOUS_EXPIRES_AT");
-		if active_credential_domains_overlap(
-			&secret,
-			previous_secret.as_deref(),
-			previous_expires_at,
-			relay_secret.as_deref(),
-			previous_relay_secret.as_deref(),
-			previous_relay_expires_at,
-		) {
-			return None;
-		}
-		if non_empty_environment_secret("AETHER_OUTBOUND_EXPORT_TOKEN")
-			.is_some_and(|token| !outbound_export_token_is_isolated(&token))
-		{
-			return None;
-		}
-		Some(Self::new_with_transition_secret(
-			secret,
-			previous_secret,
-			previous_expires_at,
-		))
+    pub fn from_env() -> Option<Self> {
+        let secret = non_empty_environment_secret("AETHER_CONTROL_SECRET")?;
+        let previous_secret = non_empty_environment_secret("AETHER_CONTROL_SECRET_PREVIOUS");
+        let previous_expires_at = environment_expiry("AETHER_CONTROL_SECRET_PREVIOUS_EXPIRES_AT");
+        let relay_secret = non_empty_environment_secret("AETHER_RELAY_SIGNING_SECRET");
+        let previous_relay_secret =
+            non_empty_environment_secret("AETHER_RELAY_SIGNING_SECRET_PREVIOUS");
+        let previous_relay_expires_at =
+            environment_expiry("AETHER_RELAY_SIGNING_SECRET_PREVIOUS_EXPIRES_AT");
+        if active_credential_domains_overlap(
+            &secret,
+            previous_secret.as_deref(),
+            previous_expires_at,
+            relay_secret.as_deref(),
+            previous_relay_secret.as_deref(),
+            previous_relay_expires_at,
+        ) {
+            return None;
+        }
+        if non_empty_environment_secret("AETHER_OUTBOUND_EXPORT_TOKEN")
+            .is_some_and(|token| !outbound_export_token_is_isolated(&token))
+        {
+            return None;
+        }
+        Some(Self::new_with_transition_secret(
+            secret,
+            previous_secret,
+            previous_expires_at,
+        ))
     }
 
     /// 验证控制面请求签名（与 relay 签名算法相同但使用不同密钥）
-	pub fn verify_control_request(&self, headers: &HeaderMap) -> bool {
-		// Control API uses Bearer token for simplicity
-		match headers.get("authorization") {
-			Some(v) => {
-				let val = v.to_str().unwrap_or("");
-				val.strip_prefix("Bearer ").is_some_and(|token| {
-					let current_matches =
-						constant_time_eq(token.as_bytes(), self.control_secret.as_bytes());
-					let transition_matches = self
-						.previous_control_secret
-						.as_deref()
-						.filter(|_| {
-							self.previous_control_secret_expires_at
-								.is_some_and(|expires_at| expires_at > Utc::now().timestamp() as u64)
-						})
-						.is_some_and(|secret| constant_time_eq(token.as_bytes(), secret.as_bytes()));
-					current_matches | transition_matches
-				})
-			}
+    pub fn verify_control_request(&self, headers: &HeaderMap) -> bool {
+        // Control API uses Bearer token for simplicity
+        match headers.get("authorization") {
+            Some(v) => {
+                let val = v.to_str().unwrap_or("");
+                val.strip_prefix("Bearer ").is_some_and(|token| {
+                    let current_matches =
+                        constant_time_eq(token.as_bytes(), self.control_secret.as_bytes());
+                    let transition_matches = self
+                        .previous_control_secret
+                        .as_deref()
+                        .filter(|_| {
+                            self.previous_control_secret_expires_at
+                                .is_some_and(|expires_at| {
+                                    expires_at > Utc::now().timestamp() as u64
+                                })
+                        })
+                        .is_some_and(|secret| {
+                            constant_time_eq(token.as_bytes(), secret.as_bytes())
+                        });
+                    current_matches | transition_matches
+                })
+            }
             None => false,
         }
     }
@@ -1082,7 +1088,8 @@ pub(crate) fn outbound_export_token_is_isolated(export_token: &str) -> bool {
     let previous_control_expires_at =
         environment_expiry("AETHER_CONTROL_SECRET_PREVIOUS_EXPIRES_AT");
     let relay_secret = non_empty_environment_secret("AETHER_RELAY_SIGNING_SECRET");
-    let previous_relay_secret = non_empty_environment_secret("AETHER_RELAY_SIGNING_SECRET_PREVIOUS");
+    let previous_relay_secret =
+        non_empty_environment_secret("AETHER_RELAY_SIGNING_SECRET_PREVIOUS");
     let previous_relay_expires_at =
         environment_expiry("AETHER_RELAY_SIGNING_SECRET_PREVIOUS_EXPIRES_AT");
 
@@ -1110,7 +1117,8 @@ pub(crate) fn is_active_service_credential(credential: &str) -> bool {
     let previous_control_expires_at =
         environment_expiry("AETHER_CONTROL_SECRET_PREVIOUS_EXPIRES_AT");
     let relay_secret = non_empty_environment_secret("AETHER_RELAY_SIGNING_SECRET");
-    let previous_relay_secret = non_empty_environment_secret("AETHER_RELAY_SIGNING_SECRET_PREVIOUS");
+    let previous_relay_secret =
+        non_empty_environment_secret("AETHER_RELAY_SIGNING_SECRET_PREVIOUS");
     let previous_relay_expires_at =
         environment_expiry("AETHER_RELAY_SIGNING_SECRET_PREVIOUS_EXPIRES_AT");
     let outbound_export_token = non_empty_environment_secret("AETHER_OUTBOUND_EXPORT_TOKEN");
@@ -1151,21 +1159,20 @@ fn active_credential_domains_overlap(
     let now_secs = Utc::now().timestamp().max(0) as u64;
     let first_active = [
         Some(first_current),
-        first_previous.filter(|_| {
-            first_previous_expires_at.is_some_and(|expires_at| expires_at > now_secs)
-        }),
+        first_previous
+            .filter(|_| first_previous_expires_at.is_some_and(|expires_at| expires_at > now_secs)),
     ];
     let second_active = [
         second_current,
-        second_previous.filter(|_| {
-            second_previous_expires_at.is_some_and(|expires_at| expires_at > now_secs)
-        }),
+        second_previous
+            .filter(|_| second_previous_expires_at.is_some_and(|expires_at| expires_at > now_secs)),
     ];
 
     first_active.iter().flatten().any(|first| {
-        second_active.iter().flatten().any(|second| {
-            constant_time_eq(first.as_bytes(), second.as_bytes())
-        })
+        second_active
+            .iter()
+            .flatten()
+            .any(|second| constant_time_eq(first.as_bytes(), second.as_bytes()))
     })
 }
 
@@ -1215,14 +1222,13 @@ mod tests {
     use crate::routing::ROUTING_GROUP_HEADER;
 
     use super::{
-        authenticate_relay_request, hex_encode, is_active_service_credential,
-        outbound_export_token_is_isolated, control_signature_v2_body_sha256_hex,
-        control_signature_v2_canonical_payload, verify_control_signature_v2,
-        ControlCredentialVerifier, ControlSignatureV2Secrets, ControlSignatureV2Verification,
-        RelayContext, RelayVerification, RelayVerifier, ReplayGuard, RoutingMode,
-        TrustedRelayContext, HEADER_CONTROL_BODY_SHA256, HEADER_CONTROL_NONCE,
-        HEADER_CONTROL_SIGNATURE, HEADER_CONTROL_SIGNATURE_VERSION, HEADER_CONTROL_TIMESTAMP,
-        HEADER_INSTANCE_ID, HEADER_RELAY_CONTEXT, HEADER_RELAY_SIGNATURE,
+        authenticate_relay_request, control_signature_v2_body_sha256_hex,
+        control_signature_v2_canonical_payload, hex_encode, is_active_service_credential,
+        outbound_export_token_is_isolated, verify_control_signature_v2, ControlCredentialVerifier,
+        ControlSignatureV2Secrets, ControlSignatureV2Verification, RelayContext, RelayVerification,
+        RelayVerifier, ReplayGuard, RoutingMode, TrustedRelayContext, HEADER_CONTROL_BODY_SHA256,
+        HEADER_CONTROL_NONCE, HEADER_CONTROL_SIGNATURE, HEADER_CONTROL_SIGNATURE_VERSION,
+        HEADER_CONTROL_TIMESTAMP, HEADER_INSTANCE_ID, HEADER_RELAY_CONTEXT, HEADER_RELAY_SIGNATURE,
     };
 
     struct FailingReplayGuard;
@@ -1305,14 +1311,20 @@ mod tests {
                 .unwrap_or_else(|error| panic!("read local contract {name}: {error}"));
             let peer = fs::read(peer_contract_dir.join(name))
                 .unwrap_or_else(|error| panic!("read peer contract {name}: {error}"));
-            assert_eq!(local, peer, "{name} must be byte-identical in both repositories");
+            assert_eq!(
+                local, peer,
+                "{name} must be byte-identical in both repositories"
+            );
         }
 
         let local_baseline = fs::read(local_contract_dir.join(BASELINE_NAME))
             .unwrap_or_else(|error| panic!("read local baseline: {error}"));
         let peer_baseline = fs::read(peer_contract_dir.join(BASELINE_NAME))
             .unwrap_or_else(|error| panic!("read peer baseline: {error}"));
-        assert_eq!(local_baseline, peer_baseline, "audited baselines must match");
+        assert_eq!(
+            local_baseline, peer_baseline,
+            "audited baselines must match"
+        );
 
         let baseline: serde_json::Value =
             serde_json::from_slice(&local_baseline).expect("baseline must be JSON");
@@ -1321,10 +1333,7 @@ mod tests {
             "aether-newapi-contract-baseline/v1"
         );
         assert!(baseline["baseline_revision"].as_u64().is_some());
-        assert_eq!(
-            baseline["tracked_files"],
-            serde_json::json!(TRACKED_FILES)
-        );
+        assert_eq!(baseline["tracked_files"], serde_json::json!(TRACKED_FILES));
         let file_sha256 = baseline["file_sha256"]
             .as_object()
             .expect("baseline must include per-file SHA-256 values");
@@ -1337,10 +1346,10 @@ mod tests {
             .as_str()
             .is_some_and(|value| !value.is_empty()));
 
-        let schema = fs::read(local_contract_dir.join(TRACKED_FILES[1]))
-            .expect("read contract schema");
-        let examples = fs::read(local_contract_dir.join(TRACKED_FILES[2]))
-            .expect("read contract examples");
+        let schema =
+            fs::read(local_contract_dir.join(TRACKED_FILES[1])).expect("read contract schema");
+        let examples =
+            fs::read(local_contract_dir.join(TRACKED_FILES[2])).expect("read contract examples");
         let mut hasher = Sha256::new();
         hasher.update(schema);
         hasher.update([0]);
@@ -1577,12 +1586,9 @@ mod tests {
             let _control_current = EnvVarGuard::set("AETHER_CONTROL_SECRET", "control-v2");
             let _control_previous =
                 EnvVarGuard::set("AETHER_CONTROL_SECRET_PREVIOUS", "control-v1");
-            let _control_previous_expires = EnvVarGuard::set(
-                "AETHER_CONTROL_SECRET_PREVIOUS_EXPIRES_AT",
-                "4102444800",
-            );
-            let _relay_current =
-                EnvVarGuard::set("AETHER_RELAY_SIGNING_SECRET", "relay-v2");
+            let _control_previous_expires =
+                EnvVarGuard::set("AETHER_CONTROL_SECRET_PREVIOUS_EXPIRES_AT", "4102444800");
+            let _relay_current = EnvVarGuard::set("AETHER_RELAY_SIGNING_SECRET", "relay-v2");
             let _relay_previous =
                 EnvVarGuard::set("AETHER_RELAY_SIGNING_SECRET_PREVIOUS", "relay-v1");
             let _relay_previous_expires = EnvVarGuard::set(
@@ -1624,13 +1630,13 @@ mod tests {
                 && !outbound_export_token_is_isolated("relay-v2");
 
             std::env::set_var("AETHER_OUTBOUND_EXPORT_TOKEN", "control-v1");
-            let export_transition_collision_rejected =
-                ControlCredentialVerifier::from_env().is_none()
-                    && RelayVerifier::from_env(aether_runtime_state::RuntimeState::memory(
-                        Default::default(),
-                    ))
-                    .is_none()
-                    && !outbound_export_token_is_isolated("control-v1");
+            let export_transition_collision_rejected = ControlCredentialVerifier::from_env()
+                .is_none()
+                && RelayVerifier::from_env(aether_runtime_state::RuntimeState::memory(
+                    Default::default(),
+                ))
+                .is_none()
+                && !outbound_export_token_is_isolated("control-v1");
 
             std::env::set_var("AETHER_CONTROL_SECRET_PREVIOUS_EXPIRES_AT", "1");
             let expired_transition_does_not_block = ControlCredentialVerifier::from_env().is_some()
@@ -1659,10 +1665,8 @@ mod tests {
         let _control_current = EnvVarGuard::set("AETHER_CONTROL_SECRET", "control-current");
         let _control_previous =
             EnvVarGuard::set("AETHER_CONTROL_SECRET_PREVIOUS", "control-previous");
-        let _control_previous_expires = EnvVarGuard::set(
-            "AETHER_CONTROL_SECRET_PREVIOUS_EXPIRES_AT",
-            "4102444800",
-        );
+        let _control_previous_expires =
+            EnvVarGuard::set("AETHER_CONTROL_SECRET_PREVIOUS_EXPIRES_AT", "4102444800");
         let _relay_current = EnvVarGuard::set("AETHER_RELAY_SIGNING_SECRET", "relay-current");
         let _relay_previous =
             EnvVarGuard::set("AETHER_RELAY_SIGNING_SECRET_PREVIOUS", "relay-previous");
@@ -1695,8 +1699,8 @@ mod tests {
 
     #[test]
     fn disabled_routing_mode_is_deserializable_and_fails_closed() {
-        let mode: RoutingMode =
-            serde_json::from_str("\"disabled\"").expect("disabled is part of the integration contract");
+        let mode: RoutingMode = serde_json::from_str("\"disabled\"")
+            .expect("disabled is part of the integration contract");
 
         let environment_mode = {
             let _lock = RELAY_ENV_LOCK
@@ -1960,13 +1964,22 @@ mod tests {
         );
         let mut headers = HeaderMap::new();
 
-        headers.insert("authorization", HeaderValue::from_static("Bearer control-v2"));
+        headers.insert(
+            "authorization",
+            HeaderValue::from_static("Bearer control-v2"),
+        );
         assert!(verifier.verify_control_request(&headers));
 
-        headers.insert("authorization", HeaderValue::from_static("Bearer control-v1"));
+        headers.insert(
+            "authorization",
+            HeaderValue::from_static("Bearer control-v1"),
+        );
         assert!(verifier.verify_control_request(&headers));
 
-        headers.insert("authorization", HeaderValue::from_static("Bearer control-invalid"));
+        headers.insert(
+            "authorization",
+            HeaderValue::from_static("Bearer control-invalid"),
+        );
         assert!(!verifier.verify_control_request(&headers));
     }
 
@@ -2174,7 +2187,9 @@ mod tests {
 
     #[tokio::test]
     async fn environment_transition_secrets_require_a_future_deadline() {
-        let _lock = RELAY_ENV_LOCK.lock().expect("relay env lock should not be poisoned");
+        let _lock = RELAY_ENV_LOCK
+            .lock()
+            .expect("relay env lock should not be poisoned");
         let _instance_id = EnvVarGuard::set("AETHER_INSTANCE_ID", "aether-primary");
         let _relay_current = EnvVarGuard::set("AETHER_RELAY_SIGNING_SECRET", "relay-v2");
         let _relay_previous = EnvVarGuard::set("AETHER_RELAY_SIGNING_SECRET_PREVIOUS", "relay-v1");
@@ -2203,7 +2218,10 @@ mod tests {
         let control = ControlCredentialVerifier::from_env()
             .expect("current control secret should configure the verifier");
         let mut headers = HeaderMap::new();
-        headers.insert("authorization", HeaderValue::from_static("Bearer control-v1"));
+        headers.insert(
+            "authorization",
+            HeaderValue::from_static("Bearer control-v1"),
+        );
         assert!(control.verify_control_request(&headers));
     }
 

@@ -258,8 +258,9 @@ impl RelayProfitLedgerStore {
     ) -> Result<Vec<PersistedRelayProfitRecord>, DataLayerError> {
         validate_filter(filter)?;
         let rows: Vec<RelayProfitLedgerRow> = match &self.backend {
-            RelayProfitLedgerBackend::Postgres(pool) => sqlx::query_as(
-                "SELECT id, instance_id, request_id, channel_id, model_id, prompt_tokens,
+            RelayProfitLedgerBackend::Postgres(pool) => {
+                sqlx::query_as(
+                    "SELECT id, instance_id, request_id, channel_id, model_id, prompt_tokens,
                         completion_tokens, charged_quota, quota_per_unit, upstream_cost_usd,
                         downstream_revenue_usd, payment_fee_usd, net_profit_usd, margin_percent,
                         cost_confidence, occurred_at_unix_ms
@@ -268,14 +269,16 @@ impl RelayProfitLedgerStore {
                    AND occurred_at_unix_ms >= $2
                    AND occurred_at_unix_ms < $3
                  ORDER BY occurred_at_unix_ms ASC, id ASC",
-            )
-            .bind(&filter.instance_id)
-            .bind(filter.start_unix_ms)
-            .bind(filter.end_unix_ms)
-            .fetch_all(pool)
-            .await,
-            RelayProfitLedgerBackend::Mysql(pool) => sqlx::query_as(
-                "SELECT id, instance_id, request_id, channel_id, model_id, prompt_tokens,
+                )
+                .bind(&filter.instance_id)
+                .bind(filter.start_unix_ms)
+                .bind(filter.end_unix_ms)
+                .fetch_all(pool)
+                .await
+            }
+            RelayProfitLedgerBackend::Mysql(pool) => {
+                sqlx::query_as(
+                    "SELECT id, instance_id, request_id, channel_id, model_id, prompt_tokens,
                         completion_tokens, charged_quota, quota_per_unit, upstream_cost_usd,
                         downstream_revenue_usd, payment_fee_usd, net_profit_usd, margin_percent,
                         cost_confidence, occurred_at_unix_ms
@@ -284,14 +287,16 @@ impl RelayProfitLedgerStore {
                    AND occurred_at_unix_ms >= ?
                    AND occurred_at_unix_ms < ?
                  ORDER BY occurred_at_unix_ms ASC, id ASC",
-            )
-            .bind(&filter.instance_id)
-            .bind(filter.start_unix_ms)
-            .bind(filter.end_unix_ms)
-            .fetch_all(pool)
-            .await,
-            RelayProfitLedgerBackend::Sqlite(pool) => sqlx::query_as(
-                "SELECT id, instance_id, request_id, channel_id, model_id, prompt_tokens,
+                )
+                .bind(&filter.instance_id)
+                .bind(filter.start_unix_ms)
+                .bind(filter.end_unix_ms)
+                .fetch_all(pool)
+                .await
+            }
+            RelayProfitLedgerBackend::Sqlite(pool) => {
+                sqlx::query_as(
+                    "SELECT id, instance_id, request_id, channel_id, model_id, prompt_tokens,
                         completion_tokens, charged_quota, quota_per_unit, upstream_cost_usd,
                         downstream_revenue_usd, payment_fee_usd, net_profit_usd, margin_percent,
                         cost_confidence, occurred_at_unix_ms
@@ -300,16 +305,19 @@ impl RelayProfitLedgerStore {
                    AND occurred_at_unix_ms >= ?
                    AND occurred_at_unix_ms < ?
                  ORDER BY occurred_at_unix_ms ASC, id ASC",
-            )
-            .bind(&filter.instance_id)
-            .bind(filter.start_unix_ms)
-            .bind(filter.end_unix_ms)
-            .fetch_all(pool)
-            .await,
+                )
+                .bind(&filter.instance_id)
+                .bind(filter.start_unix_ms)
+                .bind(filter.end_unix_ms)
+                .fetch_all(pool)
+                .await
+            }
         }
         .map_err(DataLayerError::sql)?;
 
-        rows.into_iter().map(PersistedRelayProfitRecord::try_from).collect()
+        rows.into_iter()
+            .map(PersistedRelayProfitRecord::try_from)
+            .collect()
     }
 }
 
@@ -700,13 +708,19 @@ mod tests {
         first.id = "profit-window-first".to_string();
         first.request_id = "request-window-first".to_string();
         first.occurred_at_unix_ms = 100;
-        assert!(store.append(&first).await.expect("first record should persist"));
+        assert!(store
+            .append(&first)
+            .await
+            .expect("first record should persist"));
 
         let mut last = known_record();
         last.id = "profit-window-last".to_string();
         last.request_id = "request-window-last".to_string();
         last.occurred_at_unix_ms = 200;
-        assert!(store.append(&last).await.expect("last record should persist"));
+        assert!(store
+            .append(&last)
+            .await
+            .expect("last record should persist"));
 
         let mut other_instance = known_record();
         other_instance.id = "profit-window-other-instance".to_string();

@@ -138,8 +138,7 @@ impl ResolvedGroupLineage {
 
         for group in &groups {
             enabled &= group.enabled;
-            model_whitelist =
-                intersect_model_whitelists(model_whitelist, &group.model_whitelist);
+            model_whitelist = intersect_model_whitelists(model_whitelist, &group.model_whitelist);
             model_blacklist.extend(group.model_blacklist.clone());
         }
 
@@ -162,9 +161,7 @@ impl ResolvedGroupLineage {
 
         match &self.model_whitelist {
             None => true,
-            Some(whitelist) => whitelist
-                .iter()
-                .any(|model| model_matches(model, model_id)),
+            Some(whitelist) => whitelist.iter().any(|model| model_matches(model, model_id)),
         }
     }
 
@@ -1125,9 +1122,7 @@ mod tests {
             .expect("models allowed by every ancestor should be priced");
         assert!((multiplier - 6.0).abs() < f64::EPSILON);
         assert!(matches!(
-            manager
-                .get_effective_multiplier(&child.id, "gpt-4")
-                .await,
+            manager.get_effective_multiplier(&child.id, "gpt-4").await,
             Err(RelayError::InvalidConfig(_))
         ));
 

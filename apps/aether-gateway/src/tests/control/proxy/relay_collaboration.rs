@@ -334,12 +334,7 @@ async fn relay_integration_config_store() -> IntegrationConfigStore {
         .compare_and_set(
             "aether-primary",
             0,
-            &relay_integration_config_update(
-                "pro",
-                true,
-                "direct_channel",
-                1_784_073_600_000,
-            ),
+            &relay_integration_config_update("pro", true, "direct_channel", 1_784_073_600_000),
         )
         .await
         .expect("relay integration config should be inserted");
@@ -501,8 +496,8 @@ fn signed_relay_direct_channel_executes_real_provider_catalog_without_leaking_re
     );
 }
 
-async fn signed_relay_direct_channel_executes_real_provider_catalog_without_leaking_relay_credentials_inner()
- {
+async fn signed_relay_direct_channel_executes_real_provider_catalog_without_leaking_relay_credentials_inner(
+) {
     let provider_hits = Arc::new(AtomicUsize::new(0));
     let provider_hits_clone = Arc::clone(&provider_hits);
     let seen_provider_request = Arc::new(Mutex::new(None::<SeenProviderRequest>));
@@ -595,12 +590,7 @@ async fn signed_relay_direct_channel_executes_real_provider_catalog_without_leak
         .compare_and_set(
             "aether-primary",
             1,
-            &relay_integration_config_update(
-                "balanced",
-                true,
-                "direct_channel",
-                1_784_073_600_000,
-            ),
+            &relay_integration_config_update("balanced", true, "direct_channel", 1_784_073_600_000),
         )
         .await
         .expect("persisted relay route profile should update");
@@ -761,12 +751,7 @@ async fn signed_relay_direct_channel_executes_real_provider_catalog_without_leak
         .compare_and_set(
             "aether-primary",
             3,
-            &relay_integration_config_update(
-                "balanced",
-                true,
-                "disabled",
-                1_784_073_600_002,
-            ),
+            &relay_integration_config_update("balanced", true, "disabled", 1_784_073_600_002),
         )
         .await
         .expect("disabled execution-mode config should persist");
@@ -1505,7 +1490,10 @@ async fn signed_relay_direct_channel_stream_retry_preserves_correlation_and_sett
             http::header::AUTHORIZATION,
             "Bearer sk-relay-stream-retry-client",
         )
-        .header(crate::constants::TRACE_ID_HEADER, "forged-stream-retry-trace");
+        .header(
+            crate::constants::TRACE_ID_HEADER,
+            "forged-stream-retry-trace",
+        );
     for (name, value) in relay_headers("relay-secret", request_id) {
         request = request.header(name, value);
     }
@@ -1538,7 +1526,10 @@ async fn signed_relay_direct_channel_stream_retry_preserves_correlation_and_sett
         Some(request_id)
     );
     let response_text = response.text().await.expect("stream response should read");
-    assert_eq!(response_text.matches("relay stream retry success").count(), 1);
+    assert_eq!(
+        response_text.matches("relay stream retry success").count(),
+        1
+    );
     assert_eq!(response_text.matches("data: [DONE]").count(), 1);
 
     assert_eq!(provider_hits.load(Ordering::SeqCst), 2);
@@ -1554,10 +1545,9 @@ async fn signed_relay_direct_channel_stream_retry_preserves_correlation_and_sett
         "Bearer sk-upstream-relay-stream-backup"
     );
     assert!(seen.iter().all(|request| !request.relay_headers_present));
-    assert!(
-        seen.iter()
-            .all(|request| request.request_id.as_deref() == Some(request_id))
-    );
+    assert!(seen
+        .iter()
+        .all(|request| request.request_id.as_deref() == Some(request_id)));
     assert_eq!(seen[0].model, "gpt-5-upstream");
     assert_eq!(seen[1].model, "gpt-5-upstream-stream-backup");
     assert!(seen.iter().all(|request| request.stream));
@@ -1567,11 +1557,9 @@ async fn signed_relay_direct_channel_stream_retry_preserves_correlation_and_sett
         .await
         .expect("stream retry candidates should read");
     assert_eq!(candidates.len(), 2);
-    assert!(
-        candidates
-            .iter()
-            .all(|candidate| candidate.request_id == request_id)
-    );
+    assert!(candidates
+        .iter()
+        .all(|candidate| candidate.request_id == request_id));
     assert_eq!(candidates[0].candidate_index, 0);
     assert_eq!(candidates[0].status, RequestCandidateStatus::Failed);
     assert_eq!(candidates[0].status_code, Some(401));
