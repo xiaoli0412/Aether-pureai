@@ -33,6 +33,17 @@ Aether 是一个自托管的 AI API 网关，为团队和个人提供多租户�
 
 页面预览: https://fawney19.github.io/Aether/
 
+## New API 协同与 Relay 集成（预发布）
+
+Aether 可作为 New API 的受控上游聚合与分析服务。该集成遵循 `aether-newapi/v1` 共享合同，并保持两边职责和凭据严格隔离。
+
+- **金融权威边界**：New API 是用户、充值、退款、订阅、余额、预扣费、结算和用户价格的唯一权威。Aether 只消费匿名化、只读的用量、价格、事件和快照数据，用于自身的上游成本、利润、余额、健康与路由分析；不会修改 New API 的用户金融数据，也不会自动回写用户价格。
+- **复用真实数据面主链**：通过 New API Relay 到达的请求仍进入 Aether 现有的 API Key 认证、Provider Catalog、Provider Pool、Routing Profile、代理、SSE、重试和 Usage Settlement 主链，不建立第二套孤立转发系统。管理后台提供 Relay Integration 状态页，用于查看配置、能力、修订、凭据轮换状态和关联的 Provider/Pool/Routing/Usage 页面。
+- **默认失败关闭**：当前只有 `direct_channel` 可以发起真实上游请求。`parallel_shadow` 与 `aether_decision` 是保留模式，在具备完整能力门控和安全验证前会被拒绝；签名、有效期、实例、模型或格式不匹配的 Relay 上下文同样不会进入上游转发。
+- **凭据隔离与轮换**：每个集成实例使用独立的控制面凭据和 Relay 签名凭据，并与 Aether 用户 API Key、Provider API Key 以及普通渠道凭据隔离。Relay 上下文采用短时 HMAC 签名，只包含实例、请求、通道、分组、模型和格式等必要元数据，不携带用户 API Key、身份、支付信息或余额；凭据支持受控的双密钥过渡和撤销。
+- **数据库迁移先验证副本**：Relay 的配置、inbox/outbox、事件、分组和利润账本依赖数据库迁移。上线前必须先在与生产同引擎、同版本、同数据形态的数据库副本上完成备份、迁移、回归和回滚演练；在确认兼容前，不要让 `AETHER_GATEWAY_AUTO_PREPARE_DATABASE` 对生产库自动执行迁移。SQLite、MySQL 和 PostgreSQL 都应分别完成该验证后再切换生产流量。
+- **合同与运维**：合同、签名向量和接口定义位于 [docs/contracts/aether-newapi-v1.json](docs/contracts/aether-newapi-v1.json)。生产启用前请同时检查 New API 与 Aether 的合同版本、配置修订和凭据轮换状态。
+
 ## 部署
 
 ### Docker Compose（推荐：预构建镜像）
