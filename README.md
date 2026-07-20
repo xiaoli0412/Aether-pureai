@@ -41,7 +41,10 @@ Aether 可作为 New API 的受控上游聚合与分析服务。该集成遵循 
 - **复用真实数据面主链**：通过 New API Relay 到达的请求仍进入 Aether 现有的 API Key 认证、Provider Catalog、Provider Pool、Routing Profile、代理、SSE、重试和 Usage Settlement 主链，不建立第二套孤立转发系统。管理后台提供 Relay Integration 状态页，用于查看配置、能力、修订、凭据轮换状态和关联的 Provider/Pool/Routing/Usage 页面。
 - **默认失败关闭**：当前只有 `direct_channel` 可以发起真实上游请求。`parallel_shadow` 与 `aether_decision` 是保留模式，在具备完整能力门控和安全验证前会被拒绝；签名、有效期、实例、模型或格式不匹配的 Relay 上下文同样不会进入上游转发。
 - **凭据隔离与轮换**：每个集成实例使用独立的控制面凭据和 Relay 签名凭据，并与 Aether 用户 API Key、Provider API Key 以及普通渠道凭据隔离。Relay 上下文采用短时 HMAC 签名，只包含实例、请求、通道、分组、模型和格式等必要元数据，不携带用户 API Key、身份、支付信息或余额；凭据支持受控的双密钥过渡和撤销。
+- **耐久对账与检查点**：RelayEngine 监督定期对账任务。下游实例和 `last_sync_at` 检查点保存在数据库中；每次对账将结算记录与检查点推进在同一事务提交，写入失败不会越过未结算区间。上游成本未知、利润账本或对账数据库不可用时，对账失败关闭，不会以零成本生成结算。
+- **集成状态失败关闭**：`GET /api/integrations/new-api/v1/instances/{instance_id}/status` 在集成配置数据库不可用或读取失败时返回 HTTP `503`，不会把该故障伪装成“未配置”；只有成功读取后的确实不存在配置才会报告禁用状态。
 - **数据库迁移先验证副本**：Relay 的配置、inbox/outbox、事件、分组和利润账本依赖数据库迁移。上线前必须先在与生产同引擎、同版本、同数据形态的数据库副本上完成备份、迁移、回归和回滚演练；在确认兼容前，不要让 `AETHER_GATEWAY_AUTO_PREPARE_DATABASE` 对生产库自动执行迁移。SQLite、MySQL 和 PostgreSQL 都应分别完成该验证后再切换生产流量。
+- **预发布限制**：本轮尚未以完整 Docker、Redis、New API 和生产数据库拓扑完成端到端生产验收。上述耐久化与失败关闭行为不能替代实际部署环境中的合同、网络、迁移、备份和回滚验证；未完成验证前不要启用真实流量。
 - **合同与运维**：合同、签名向量和接口定义位于 [docs/contracts/aether-newapi-v1.json](docs/contracts/aether-newapi-v1.json)。生产启用前请同时检查 New API 与 Aether 的合同版本、配置修订和凭据轮换状态。
 
 ## 部署
