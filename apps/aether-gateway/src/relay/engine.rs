@@ -11,9 +11,7 @@ use super::discovery::PriceDiscoveryService;
 use super::event_consumer::SyncConsumer;
 use super::event_outbox::EventOutbox;
 use super::health::HealthStore;
-use super::profit::{
-    spawn_profit_writer_task, ProfitLedgerWork, ProfitLedgerWriter,
-};
+use super::profit::{spawn_profit_writer_task, ProfitLedgerWork, ProfitLedgerWriter};
 use super::reconcile::ReconciliationService;
 use super::routing::RouteSelectionService;
 use crate::data::GatewayDataState;
@@ -255,6 +253,11 @@ impl RelayEngine {
                     .spawn_monitor_task(self.background_shutdown.subscribe()),
             ),
         ];
+        tasks.push((
+            "relay_reconciliation",
+            Arc::clone(&self.reconciler)
+                .spawn_reconciliation_task(self.background_shutdown.subscribe()),
+        ));
         if let Some(consumer) = &self.sync_consumer {
             tasks.push((
                 "relay_newapi_sync_consumer",
@@ -283,5 +286,40 @@ impl RelayEngine {
             }
         }
         tasks
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RelayEngineConfig;
+    use crate::state::AppState;
+
+    #[tokio::test]
+    async fn relay_background_tasks_supervise_reconciliation_worker() {
+        let mut state = AppState::new().expect("gateway state should build");
+        let mut config = RelayEngineConfig::default();
+        config.enabled = true;
+        state.configure_relay_engine_with_config(config);
+
+        let relay = state
+            .relay_engine()
+            .expect("enabled relay configuration should create an engine");
+        let tasks = relay.spawn_background_tasks();
+        let reconciliation_task = tasks
+            .iter()
+            .find(|(task_key, _)| *task_key == "relay_reconciliation")
+            .map(|(_, task)| task)
+            .expect("relay reconciliation must be supervised as a background task");
+
+        tokio::task::yield_now().await;
+        assert!(
+            !reconciliation_task.is_finished(),
+            "reconciliation worker should remain scheduled for its configured interval"
+        );
+
+        let _ = relay.background_shutdown.send(());
+        for (_, task) in tasks {
+            task.abort();
+        }
     }
 }

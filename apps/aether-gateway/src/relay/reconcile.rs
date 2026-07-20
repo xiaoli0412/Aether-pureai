@@ -9,8 +9,10 @@ use aether_data::repository::relay_profit::{
     PersistedRelayProfitRecord, RelayCostConfidence, RelayProfitLedgerFilter,
     RelayProfitLedgerStore,
 };
+use aether_data::repository::relay_reconciliation::{
+    PersistedRelayDownstreamInstance, PersistedRelaySettlement, RelayReconciliationStore,
+};
 use aether_relay_core::pricing::try_quota_to_usd;
-use aether_runtime_state::RuntimeState;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
@@ -71,7 +73,7 @@ pub struct CreateDownstreamInput {
 #[derive(Clone)]
 pub struct ReconciliationService {
     pub(crate) config: Arc<RelayEngineConfig>,
-    pub(crate) runtime_state: RuntimeState,
+    pub(crate) reconciliation_store: Option<RelayReconciliationStore>,
     pub(crate) profit_store: Option<RelayProfitLedgerStore>,
     pub(crate) ledger_instance_id: String,
     pub(crate) http_client: reqwest::Client,
@@ -80,7 +82,7 @@ pub struct ReconciliationService {
 impl ReconciliationService {
     pub fn new(
         config: Arc<RelayEngineConfig>,
-        runtime_state: RuntimeState,
+        reconciliation_store: Option<RelayReconciliationStore>,
         profit_store: Option<RelayProfitLedgerStore>,
         ledger_instance_id: String,
     ) -> Self {
@@ -90,7 +92,7 @@ impl ReconciliationService {
             .unwrap_or_else(|_| reqwest::Client::new());
         Self {
             config,
-            runtime_state,
+            reconciliation_store,
             profit_store,
             ledger_instance_id,
             http_client,
@@ -98,8 +100,11 @@ impl ReconciliationService {
     }
 
     /// 启动定期对账后台任务
-    pub fn spawn_reconciliation_task(self: Arc<Self>, mut shutdown: watch::Receiver<()>) {
-        let interval = Duration::from_secs(self.config.reconciliation_interval_secs);
+    pub fn spawn_reconciliation_task(
+        self: Arc<Self>,
+        mut shutdown: watch::Receiver<()>,
+    ) -> tokio::task::JoinHandle<()> {
+        let interval = Duration::from_secs(self.config.reconciliation_interval_secs.max(1));
         tokio::spawn(async move {
             info!(
                 interval_secs = self.config.reconciliation_interval_secs,
@@ -122,7 +127,7 @@ impl ReconciliationService {
                     }
                 }
             }
-        });
+        })
     }
 
     /// 执行一次对账
@@ -196,22 +201,13 @@ impl ReconciliationService {
             created_at: now.to_rfc3339(),
         };
 
-        // Store settlement
-        let key = format!("relay:settlement:{}", settlement.id);
-        if let Ok(json) = serde_json::to_string(&settlement) {
-            let _ = self
-                .runtime_state
-                .kv_set(&key, json, Some(Duration::from_secs(86400 * 90)))
-                .await;
-        }
-
-        // Update last_sync_at
-        let instance_key = format!("relay:downstream:{}", instance.id);
-        let mut updated = instance.clone();
-        updated.last_sync_at = Some(now.to_rfc3339());
-        if let Ok(json) = serde_json::to_string(&updated) {
-            let _ = self.runtime_state.kv_set(&instance_key, json, None).await;
-        }
+        let persisted_settlement = persisted_settlement(&settlement)?;
+        self.reconciliation_store()?
+            .record_settlement_and_advance_sync(&persisted_settlement)
+            .await
+            .map_err(|error| {
+                RelayError::Reconciliation(format!("persist reconciliation settlement: {error}"))
+            })?;
 
         info!(
             downstream_id = %instance.id,
@@ -316,25 +312,15 @@ impl ReconciliationService {
     pub async fn get_enabled_downstream_instances(
         &self,
     ) -> Result<Vec<StoredDownstreamInstance>, RelayError> {
-        let members = self
-            .runtime_state
-            .set_members("relay:downstream:enabled")
+        self.reconciliation_store()?
+            .list_enabled_downstream_instances()
             .await
-            .map_err(|e| RelayError::RuntimeState(e.to_string()))?;
-
-        let mut instances = Vec::new();
-        for id in &members {
-            let key = format!("relay:downstream:{}", id);
-            if let Ok(Some(value)) = self.runtime_state.kv_get(&key).await {
-                if let Ok(instance) = serde_json::from_str::<StoredDownstreamInstance>(&value) {
-                    if instance.enabled {
-                        instances.push(instance);
-                    }
-                }
-            }
-        }
-
-        Ok(instances)
+            .map_err(|error| {
+                RelayError::Reconciliation(format!("load downstream instances: {error}"))
+            })?
+            .into_iter()
+            .map(stored_downstream_instance)
+            .collect()
     }
 
     /// 验证下游实例连接有效性
@@ -356,33 +342,101 @@ impl ReconciliationService {
         }
     }
 
-    /// 保存下游实例到 RuntimeState
+    /// Saves a downstream instance to the durable reconciliation database.
     pub async fn save_downstream_instance(
         &self,
         instance: &StoredDownstreamInstance,
     ) -> Result<(), RelayError> {
-        let key = format!("relay:downstream:{}", instance.id);
-        let json = serde_json::to_string(instance)
-            .map_err(|e| RelayError::Internal(format!("serialize downstream: {}", e)))?;
-        self.runtime_state
-            .kv_set(&key, json, None)
+        let persisted = persisted_downstream_instance(instance)?;
+        self.reconciliation_store()?
+            .insert_downstream_instance(&persisted)
             .await
-            .map_err(|e| RelayError::RuntimeState(e.to_string()))?;
-
-        if instance.enabled {
-            self.runtime_state
-                .set_add("relay:downstream:enabled", &instance.id)
-                .await
-                .map_err(|e| RelayError::RuntimeState(e.to_string()))?;
-        } else {
-            self.runtime_state
-                .set_remove("relay:downstream:enabled", &instance.id)
-                .await
-                .map_err(|e| RelayError::RuntimeState(e.to_string()))?;
-        }
-
-        Ok(())
+            .map_err(|error| {
+                RelayError::Reconciliation(format!("persist downstream instance: {error}"))
+            })
     }
+
+    pub async fn delete_downstream_instance(&self, id: &str) -> Result<bool, RelayError> {
+        self.reconciliation_store()?
+            .delete_downstream_instance(id)
+            .await
+            .map_err(|error| {
+                RelayError::Reconciliation(format!("delete downstream instance: {error}"))
+            })
+    }
+
+    fn reconciliation_store(&self) -> Result<&RelayReconciliationStore, RelayError> {
+        self.reconciliation_store.as_ref().ok_or_else(|| {
+            RelayError::Reconciliation(
+                "reconciliation database is unavailable; durable downstream state is required"
+                    .to_string(),
+            )
+        })
+    }
+}
+
+fn stored_downstream_instance(
+    instance: PersistedRelayDownstreamInstance,
+) -> Result<StoredDownstreamInstance, RelayError> {
+    Ok(StoredDownstreamInstance {
+        id: instance.id,
+        name: instance.name,
+        endpoint: instance.endpoint,
+        api_key: instance.api_key,
+        enabled: instance.enabled,
+        last_sync_at: instance
+            .last_sync_at_unix_ms
+            .map(format_reconciliation_timestamp)
+            .transpose()?,
+        created_at: format_reconciliation_timestamp(instance.created_at_unix_ms)?,
+    })
+}
+
+fn persisted_downstream_instance(
+    instance: &StoredDownstreamInstance,
+) -> Result<PersistedRelayDownstreamInstance, RelayError> {
+    Ok(PersistedRelayDownstreamInstance {
+        id: instance.id.clone(),
+        name: instance.name.clone(),
+        endpoint: instance.endpoint.clone(),
+        api_key: instance.api_key.clone(),
+        enabled: instance.enabled,
+        last_sync_at_unix_ms: instance
+            .last_sync_at
+            .as_deref()
+            .map(|value| parse_reconciliation_period(value, "last_sync_at"))
+            .transpose()?,
+        created_at_unix_ms: parse_reconciliation_period(&instance.created_at, "created_at")?,
+    })
+}
+
+fn persisted_settlement(
+    settlement: &StoredSettlement,
+) -> Result<PersistedRelaySettlement, RelayError> {
+    Ok(PersistedRelaySettlement {
+        id: settlement.id.clone(),
+        downstream_id: settlement.downstream_id.clone(),
+        period_start_unix_ms: parse_reconciliation_period(
+            &settlement.period_start,
+            "period_start",
+        )?,
+        period_end_unix_ms: parse_reconciliation_period(&settlement.period_end, "period_end")?,
+        downstream_revenue_usd: settlement.downstream_revenue_usd,
+        upstream_cost_usd: settlement.upstream_cost_usd,
+        difference_usd: settlement.difference_usd,
+        difference_percent: settlement.difference_percent,
+        is_anomaly: settlement.is_anomaly,
+        raw_data_json: settlement.raw_data_json.clone(),
+        created_at_unix_ms: parse_reconciliation_period(&settlement.created_at, "created_at")?,
+    })
+}
+
+fn format_reconciliation_timestamp(value: i64) -> Result<String, RelayError> {
+    DateTime::<Utc>::from_timestamp_millis(value)
+        .ok_or_else(|| {
+            RelayError::Reconciliation("invalid durable reconciliation timestamp".to_string())
+        })
+        .map(|timestamp| timestamp.to_rfc3339())
 }
 
 fn parse_reconciliation_period(value: &str, field: &str) -> Result<i64, RelayError> {
@@ -391,9 +445,7 @@ fn parse_reconciliation_period(value: &str, field: &str) -> Result<i64, RelayErr
         .map(|value| value.timestamp_millis())
 }
 
-fn sum_settled_upstream_cost(
-    records: &[PersistedRelayProfitRecord],
-) -> Result<f64, RelayError> {
+fn sum_settled_upstream_cost(records: &[PersistedRelayProfitRecord]) -> Result<f64, RelayError> {
     if records.is_empty() {
         return Err(RelayError::Reconciliation(
             "no settled upstream cost records are available for this period".to_string(),
@@ -452,11 +504,9 @@ fn downstream_revenue_usd(stats: &DownstreamStats) -> Result<f64, RelayError> {
 
 #[cfg(test)]
 mod tests {
-    use aether_data::repository::relay_profit::RelayProfitLedgerStore;
     use aether_data::repository::relay_profit::{
-        PersistedRelayProfitRecord, RelayCostConfidence,
+        PersistedRelayProfitRecord, RelayCostConfidence, RelayProfitLedgerStore,
     };
-    use aether_runtime_state::RuntimeState;
     use sqlx::sqlite::SqlitePoolOptions;
 
     use super::{
@@ -559,7 +609,7 @@ mod tests {
     ) -> ReconciliationService {
         ReconciliationService::new(
             std::sync::Arc::new(RelayEngineConfig::default()),
-            RuntimeState::memory(Default::default()),
+            None,
             Some(store),
             ledger_instance_id.to_string(),
         )
@@ -569,11 +619,23 @@ mod tests {
     async fn reconciliation_sums_settled_upstream_costs_from_sql_ledger() {
         let store = test_profit_store().await;
         store
-            .append(&settled_record("profit-1", "instance-a", "request-1", 2_000, 0.25))
+            .append(&settled_record(
+                "profit-1",
+                "instance-a",
+                "request-1",
+                2_000,
+                0.25,
+            ))
             .await
             .expect("first settled profit should persist");
         store
-            .append(&settled_record("profit-2", "instance-a", "request-2", 3_000, 0.75))
+            .append(&settled_record(
+                "profit-2",
+                "instance-a",
+                "request-2",
+                3_000,
+                0.75,
+            ))
             .await
             .expect("second settled profit should persist");
 
@@ -608,7 +670,13 @@ mod tests {
 
     #[test]
     fn reconciliation_refuses_unknown_cost_confidence_even_when_a_value_is_present() {
-        let mut record = settled_record("profit-inconsistent", "instance-a", "request-a", 2_000, 0.25);
+        let mut record = settled_record(
+            "profit-inconsistent",
+            "instance-a",
+            "request-a",
+            2_000,
+            0.25,
+        );
         record.cost_confidence = RelayCostConfidence::Unknown;
 
         let error = sum_settled_upstream_cost(&[record])
@@ -633,11 +701,23 @@ mod tests {
     async fn reconciliation_costs_are_scoped_to_the_configured_aether_instance() {
         let store = test_profit_store().await;
         store
-            .append(&settled_record("profit-a", "instance-a", "request-a", 2_000, 0.25))
+            .append(&settled_record(
+                "profit-a",
+                "instance-a",
+                "request-a",
+                2_000,
+                0.25,
+            ))
             .await
             .expect("first instance profit should persist");
         store
-            .append(&settled_record("profit-b", "instance-b", "request-b", 2_000, 9.0))
+            .append(&settled_record(
+                "profit-b",
+                "instance-b",
+                "request-b",
+                2_000,
+                9.0,
+            ))
             .await
             .expect("second instance profit should persist");
 

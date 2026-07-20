@@ -7,7 +7,7 @@ use aether_data::repository::relay_profit::{
 };
 use axum::extract::{ConnectInfo, Json, Path, Query, Request, State};
 use axum::middleware::Next;
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::Router;
 use chrono::{DateTime, Utc};
@@ -632,13 +632,7 @@ async fn delete_downstream(
         .relay_engine()
         .ok_or(RelayError::Internal("relay not enabled".into()))?;
 
-    let key = format!("relay:downstream:{}", id);
-    let _ = relay.config_store.runtime_state.kv_delete(&key).await;
-    let _ = relay
-        .config_store
-        .runtime_state
-        .set_remove("relay:downstream:enabled", &id)
-        .await;
+    let _ = relay.reconciler.delete_downstream_instance(&id).await?;
 
     Ok(ok_response(format!("downstream {} deleted", id)))
 }
@@ -745,9 +739,7 @@ async fn get_dashboard(
 }
 
 /// GET /api/relay/integration-status
-async fn get_integration_status(
-    State(state): State<AppState>,
-) -> Result<Json<ApiResponse<RelayIntegrationStatus>>, RelayError> {
+async fn get_integration_status(State(state): State<AppState>) -> Result<Response, RelayError> {
     let relay = state.relay_engine();
     let relay_enabled = relay.is_some_and(|relay| relay.is_enabled());
     let Some(instance_id) = relay.map(|relay| relay.instance_id.clone()) else {
@@ -756,15 +748,11 @@ async fn get_integration_status(
             relay_enabled,
             config: None,
             credentials: None,
-        }));
+        })
+        .into_response());
     };
     let Some(store) = state.relay_integration_config_store() else {
-        return Ok(ok_response(RelayIntegrationStatus {
-            configured: false,
-            relay_enabled,
-            config: None,
-            credentials: None,
-        }));
+        return Ok(integration_status_store_unavailable_response());
     };
 
     let config = store.get(&instance_id).await.map_err(|error| {
@@ -804,7 +792,19 @@ async fn get_integration_status(
         relay_enabled,
         config,
         credentials,
-    }))
+    })
+    .into_response())
+}
+
+fn integration_status_store_unavailable_response() -> Response {
+    (
+        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+        Json(serde_json::json!({
+            "success": false,
+            "message": "integration config database is unavailable",
+        })),
+    )
+        .into_response()
 }
 
 // ==================== Sync Triggers ====================
@@ -1739,12 +1739,28 @@ mod tests {
             ))
             .await
             .expect("store-unavailable integration status request should respond");
-        assert_eq!(unavailable.status(), StatusCode::OK);
+        assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
         let unavailable = json_body(unavailable).await;
-        assert_eq!(unavailable["data"]["configured"], false);
-        assert_eq!(unavailable["data"]["relay_enabled"], true);
-        assert!(unavailable["data"]["config"].is_null());
-        assert!(unavailable["data"]["credentials"].is_null());
+        assert_eq!(unavailable["success"], false);
+        assert_eq!(
+            unavailable["message"],
+            "integration config database is unavailable"
+        );
+        assert!(unavailable.get("data").is_none());
+        let serialized = unavailable.to_string();
+        for forbidden in [
+            "status-current-control-ciphertext",
+            "status-current-relay-ciphertext",
+            "current_control_secret_ciphertext",
+            "previous_control_secret_ciphertext",
+            "current_relay_secret_ciphertext",
+            "previous_relay_secret_ciphertext",
+        ] {
+            assert!(
+                !serialized.contains(forbidden),
+                "store-unavailable integration status must not expose {forbidden}"
+            );
+        }
     }
 
     #[tokio::test]

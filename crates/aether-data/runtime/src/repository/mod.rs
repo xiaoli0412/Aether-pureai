@@ -26,6 +26,7 @@ pub mod quota;
 pub mod relay_events;
 pub mod relay_groups;
 pub mod relay_profit;
+pub mod relay_reconciliation;
 pub mod routing_profiles;
 pub mod settlement;
 pub mod system;

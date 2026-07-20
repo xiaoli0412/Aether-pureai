@@ -470,8 +470,16 @@ impl GatewayDataState {
     pub(crate) fn relay_profit_ledger_store(
         &self,
     ) -> Option<aether_data::repository::relay_profit::RelayProfitLedgerStore> {
+        self.backends
+            .as_ref()
+            .and_then(aether_data::repository::relay_profit::RelayProfitLedgerStore::from_backends)
+    }
+
+    pub(crate) fn relay_reconciliation_store(
+        &self,
+    ) -> Option<aether_data::repository::relay_reconciliation::RelayReconciliationStore> {
         self.backends.as_ref().and_then(
-            aether_data::repository::relay_profit::RelayProfitLedgerStore::from_backends,
+            aether_data::repository::relay_reconciliation::RelayReconciliationStore::from_backends,
         )
     }
 

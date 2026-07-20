@@ -569,11 +569,12 @@ impl AppState {
         let (profit_writer, profit_receiver) = ProfitLedgerWriter::new(Arc::clone(&config));
         let profit_writer = Arc::new(profit_writer);
         let profit_store = self.data.relay_profit_ledger_store();
+        let reconciliation_store = self.data.relay_reconciliation_store();
         let instance_id =
             std::env::var("AETHER_INSTANCE_ID").unwrap_or_else(|_| "default".to_string());
         let reconciler = Arc::new(ReconciliationService::new(
             Arc::clone(&config),
-            runtime_state.clone(),
+            reconciliation_store,
             profit_store.clone(),
             instance_id.clone(),
         ));
