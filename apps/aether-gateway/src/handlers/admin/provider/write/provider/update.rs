@@ -7,8 +7,11 @@ use crate::handlers::admin::provider::shared::support::{
 use crate::handlers::admin::provider::write::normalize::normalize_chat_pii_redaction_config;
 use crate::handlers::admin::provider::write::normalize::normalize_pool_advanced_config;
 use crate::handlers::admin::provider::write::normalize::normalize_provider_type_input;
+use crate::handlers::admin::provider::write::normalize::remove_upstream_policy;
 use crate::handlers::admin::provider::write::normalize::set_responses_websocket_enabled;
+use crate::handlers::admin::provider::write::normalize::set_upstream_policy;
 use crate::handlers::admin::provider::write::normalize::validate_responses_websocket_config;
+use crate::handlers::admin::provider::write::normalize::validate_upstream_policy_config;
 use crate::handlers::admin::request::AdminAppState;
 use crate::handlers::admin::shared::normalize_json_object;
 use aether_data_contracts::repository::provider_catalog::StoredProviderCatalogProvider;
@@ -346,6 +349,14 @@ pub(crate) async fn build_admin_update_provider_record(
         set_responses_websocket_enabled(&mut config_map, enabled)?;
     }
     validate_responses_websocket_config(&config_map)?;
+
+    if fields.contains("upstream_policy") {
+        match payload.upstream_policy.clone() {
+            None | Some(serde_json::Value::Null) => remove_upstream_policy(&mut config_map),
+            Some(value) => set_upstream_policy(&mut config_map, value)?,
+        }
+    }
+    validate_upstream_policy_config(&config_map)?;
 
     updated.config = (!config_map.is_empty()).then_some(serde_json::Value::Object(config_map));
     crate::provider_transport::validate_anthropic_compatibility_profile_config(

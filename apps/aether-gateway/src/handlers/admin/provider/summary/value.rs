@@ -223,6 +223,12 @@ pub(crate) fn build_admin_provider_summary_value(
             provider.config.as_ref(),
         ),
         "responses_websocket_enabled": responses_websocket_adapter(&provider.provider_type, provider.config.as_ref()).is_some(),
+        "upstream_policy": provider
+            .config
+            .as_ref()
+            .and_then(|config| config.get("upstream_policy"))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
         "ops_quota_alert_enabled": ops_quota_alert_enabled,
         "created_at": endpoint_timestamp_or_now(provider.created_at_unix_ms, now_unix_secs),
         "updated_at": endpoint_timestamp_or_now(provider.updated_at_unix_secs, now_unix_secs),

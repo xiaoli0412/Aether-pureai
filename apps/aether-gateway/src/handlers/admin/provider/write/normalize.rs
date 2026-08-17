@@ -255,6 +255,117 @@ pub(crate) fn validate_responses_websocket_config(
     Ok(())
 }
 
+pub(crate) fn set_upstream_policy(
+    config: &mut serde_json::Map<String, serde_json::Value>,
+    policy: serde_json::Value,
+) -> Result<(), String> {
+    validate_upstream_policy_value(&policy)?;
+    if policy.is_null() {
+        config.remove("upstream_policy");
+    } else {
+        config.insert("upstream_policy".to_string(), policy);
+    }
+    Ok(())
+}
+
+pub(crate) fn remove_upstream_policy(config: &mut serde_json::Map<String, serde_json::Value>) {
+    config.remove("upstream_policy");
+}
+
+pub(crate) fn validate_upstream_policy_config(
+    config: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), String> {
+    match config.get("upstream_policy") {
+        None | Some(serde_json::Value::Null) => Ok(()),
+        Some(value) => validate_upstream_policy_value(value),
+    }
+}
+
+fn validate_upstream_policy_value(value: &serde_json::Value) -> Result<(), String> {
+    if value.is_null() {
+        return Ok(());
+    }
+    let object = value
+        .as_object()
+        .ok_or_else(|| "config.upstream_policy 必须是 JSON 对象".to_string())?;
+    for key in object.keys() {
+        if !matches!(
+            key.as_str(),
+            "mode" | "max_attempts" | "passthrough_upstream_errors" | "empty_response"
+        ) {
+            return Err(format!("config.upstream_policy 包含未知字段 {key}"));
+        }
+    }
+    if let Some(mode) = object.get("mode") {
+        let mode = mode
+            .as_str()
+            .ok_or_else(|| "config.upstream_policy.mode 必须是字符串".to_string())?;
+        if !matches!(mode, "default" | "full_passthrough") {
+            return Err(
+                "config.upstream_policy.mode 必须是 default 或 full_passthrough".to_string(),
+            );
+        }
+    }
+    if let Some(max_attempts) = object.get("max_attempts") {
+        let max_attempts = max_attempts.as_u64().ok_or_else(|| {
+            "config.upstream_policy.max_attempts 必须是 1-100 的正整数".to_string()
+        })?;
+        if !(1..=100).contains(&max_attempts) {
+            return Err("config.upstream_policy.max_attempts 必须在 1 到 100 之间".to_string());
+        }
+    }
+    if let Some(passthrough) = object.get("passthrough_upstream_errors") {
+        if !passthrough.is_boolean() {
+            return Err(
+                "config.upstream_policy.passthrough_upstream_errors 必须是布尔值".to_string(),
+            );
+        }
+    }
+    if let Some(empty) = object.get("empty_response") {
+        let empty = empty
+            .as_object()
+            .ok_or_else(|| "config.upstream_policy.empty_response 必须是 JSON 对象".to_string())?;
+        for key in empty.keys() {
+            if !matches!(key.as_str(), "detect" | "max_attempts" | "on_exhausted") {
+                return Err(format!(
+                    "config.upstream_policy.empty_response 包含未知字段 {key}"
+                ));
+            }
+        }
+        if let Some(detect) = empty.get("detect") {
+            if !detect.is_boolean() {
+                return Err(
+                    "config.upstream_policy.empty_response.detect 必须是布尔值".to_string(),
+                );
+            }
+        }
+        if let Some(max_attempts) = empty.get("max_attempts") {
+            let max_attempts = max_attempts.as_u64().ok_or_else(|| {
+                "config.upstream_policy.empty_response.max_attempts 必须是 0-100 的整数"
+                    .to_string()
+            })?;
+            if max_attempts > 100 {
+                return Err(
+                    "config.upstream_policy.empty_response.max_attempts 必须在 0 到 100 之间"
+                        .to_string(),
+                );
+            }
+        }
+        if let Some(on_exhausted) = empty.get("on_exhausted") {
+            let on_exhausted = on_exhausted.as_str().ok_or_else(|| {
+                "config.upstream_policy.empty_response.on_exhausted 必须是字符串".to_string()
+            })?;
+            if !matches!(on_exhausted, "passthrough" | "error") {
+                return Err(
+                    "config.upstream_policy.empty_response.on_exhausted 必须是 passthrough 或 error"
+                        .to_string(),
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_vertex_api_formats(
     provider_type: &str,
     auth_type: &str,
@@ -306,7 +417,8 @@ mod tests {
         normalize_chat_pii_redaction_config, normalize_pool_advanced_config,
         normalize_provider_type_input, normalize_rate_multipliers,
         reconcile_allow_auth_channel_mismatch_formats, remove_responses_websocket_enabled,
-        set_responses_websocket_enabled, validate_responses_websocket_config,
+        remove_upstream_policy, set_responses_websocket_enabled, set_upstream_policy,
+        validate_responses_websocket_config, validate_upstream_policy_config,
         validate_vertex_api_formats,
     };
     use serde_json::json;
@@ -546,5 +658,65 @@ mod tests {
             ],
         )
         .is_ok());
+    }
+
+    #[test]
+    fn validate_upstream_policy_accepts_full_schema() {
+        let mut config = serde_json::Map::new();
+        set_upstream_policy(
+            &mut config,
+            json!({
+                "mode": "full_passthrough",
+                "max_attempts": 2,
+                "passthrough_upstream_errors": true,
+                "empty_response": {
+                    "detect": true,
+                    "max_attempts": 1,
+                    "on_exhausted": "passthrough"
+                }
+            }),
+        )
+        .unwrap();
+        validate_upstream_policy_config(&config).unwrap();
+        assert!(config.get("upstream_policy").is_some());
+    }
+
+    #[test]
+    fn validate_upstream_policy_rejects_bad_shapes() {
+        for bad in [
+            json!("full_passthrough"),
+            json!({ "mode": ["full_passthrough"] }),
+            json!({ "mode": "half_passthrough" }),
+            json!({ "max_attempts": 0 }),
+            json!({ "max_attempts": 101 }),
+            json!({ "max_attempts": "2" }),
+            json!({ "passthrough_upstream_errors": "yes" }),
+            json!({ "empty_response": "on" }),
+            json!({ "empty_response": { "detect": "true" } }),
+            json!({ "empty_response": { "max_attempts": 101 } }),
+            json!({ "empty_response": { "on_exhausted": "maybe" } }),
+            json!({ "unknown_field": 1 }),
+            json!({ "empty_response": { "unknown_field": 1 } }),
+        ] {
+            let mut config = serde_json::Map::new();
+            config.insert("upstream_policy".to_string(), bad);
+            assert!(
+                validate_upstream_policy_config(&config).is_err(),
+                "expected rejection"
+            );
+        }
+    }
+
+    #[test]
+    fn set_upstream_policy_null_removes_and_remove_clears_namespace() {
+        let mut config = serde_json::Map::new();
+        set_upstream_policy(&mut config, json!({ "mode": "full_passthrough" })).unwrap();
+        set_upstream_policy(&mut config, json!(null)).unwrap();
+        assert!(config.get("upstream_policy").is_none());
+
+        set_upstream_policy(&mut config, json!({ "max_attempts": 3 })).unwrap();
+        remove_upstream_policy(&mut config);
+        assert!(config.get("upstream_policy").is_none());
+        validate_upstream_policy_config(&config).unwrap();
     }
 }
