@@ -945,6 +945,7 @@ pub struct UsageAuditListQuery {
     pub created_from_unix_secs: Option<u64>,
     pub created_until_unix_secs: Option<u64>,
     pub user_id: Option<String>,
+    pub api_key_id: Option<String>,
     pub provider_name: Option<String>,
     pub model: Option<String>,
     pub api_format: Option<String>,

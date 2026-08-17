@@ -2111,9 +2111,13 @@ pub fn admin_usage_point_sort_key(left: &Value, right: &Value) -> std::cmp::Orde
         })
 }
 
-fn admin_usage_id_from_path_suffix(request_path: &str, suffix: Option<&str>) -> Option<String> {
+fn admin_id_from_path_prefix(
+    request_path: &str,
+    prefix: &str,
+    suffix: Option<&str>,
+) -> Option<String> {
     let mut value = request_path
-        .strip_prefix("/api/admin/usage/")?
+        .strip_prefix(prefix)?
         .trim()
         .trim_matches('/')
         .to_string();
@@ -2128,11 +2132,103 @@ fn admin_usage_id_from_path_suffix(request_path: &str, suffix: Option<&str>) -> 
 }
 
 pub fn admin_usage_id_from_detail_path(request_path: &str) -> Option<String> {
-    admin_usage_id_from_path_suffix(request_path, None)
+    admin_id_from_path_prefix(request_path, "/api/admin/usage/", None)
 }
 
 pub fn admin_usage_id_from_action_path(request_path: &str, action: &str) -> Option<String> {
-    admin_usage_id_from_path_suffix(request_path, Some(action))
+    admin_id_from_path_prefix(request_path, "/api/admin/usage/", Some(action))
+}
+
+pub fn admin_diagnostics_id_from_detail_path(request_path: &str) -> Option<String> {
+    admin_id_from_path_prefix(request_path, "/api/admin/diagnostics/", None)
+}
+
+pub fn admin_diagnostics_id_from_action_path(request_path: &str, action: &str) -> Option<String> {
+    admin_id_from_path_prefix(request_path, "/api/admin/diagnostics/", Some(action))
+}
+
+fn admin_diagnostics_metadata_field(item: &StoredRequestUsageAudit, name: &str) -> Value {
+    item.request_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("error_diagnostic"))
+        .and_then(|diagnostic| diagnostic.get(name))
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+/// Projects a usage audit carrying an `error_diagnostic` marker into a compact
+/// list row for the diagnostics surface.
+pub fn admin_diagnostics_record_json(item: &StoredRequestUsageAudit) -> Value {
+    json!({
+        "usage_id": item.id,
+        "request_id": item.request_id,
+        "kind": admin_diagnostics_metadata_field(item, "kind"),
+        "upstream_status": admin_diagnostics_metadata_field(item, "upstream_status"),
+        "classification": admin_diagnostics_metadata_field(item, "classification"),
+        "decision": admin_diagnostics_metadata_field(item, "decision"),
+        "message": admin_diagnostics_metadata_field(item, "message"),
+        "user_id": item.user_id,
+        "api_key_id": item.api_key_id,
+        "model": item.model,
+        "provider_name": item.provider_name,
+        "status": item.status,
+        "status_code": item.status_code,
+        "created_at": unix_secs_to_rfc3339(item.created_at_unix_ms),
+    })
+}
+
+/// Builds the full forensic payload for a single diagnostic event: the
+/// `error_diagnostic` marker plus the four resolved header/body captures.
+pub fn build_admin_diagnostics_detail_payload(
+    item: &StoredRequestUsageAudit,
+    request_body: Option<Value>,
+    provider_request_body: Option<Value>,
+    response_body: Option<Value>,
+    client_response_body: Option<Value>,
+    include_bodies: bool,
+) -> Value {
+    let body_or_none = |body: Option<Value>| if include_bodies { body } else { None };
+    json!({
+        "usage_id": item.id,
+        "request_id": item.request_id,
+        "error_diagnostic": item
+            .request_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("error_diagnostic"))
+            .cloned()
+            .unwrap_or(Value::Null),
+        "status": item.status,
+        "status_code": item.status_code,
+        "error_message": item.error_message,
+        "error_category": item.error_category,
+        "user_id": item.user_id,
+        "api_key_id": item.api_key_id,
+        "model": item.model,
+        "target_model": item.target_model,
+        "provider_name": item.provider_name,
+        "provider_id": item.provider_id,
+        "provider_endpoint_id": item.provider_endpoint_id,
+        "provider_api_key_id": item.provider_api_key_id,
+        "api_format": item.api_format,
+        "is_stream": item.is_stream,
+        "created_at": unix_secs_to_rfc3339(item.created_at_unix_ms),
+        "request": {
+            "headers": item.request_headers.clone(),
+            "body": body_or_none(request_body),
+        },
+        "provider_request": {
+            "headers": item.provider_request_headers.clone(),
+            "body": body_or_none(provider_request_body),
+        },
+        "response": {
+            "headers": item.response_headers.clone(),
+            "body": body_or_none(response_body),
+        },
+        "client_response": {
+            "headers": item.client_response_headers.clone(),
+            "body": body_or_none(client_response_body),
+        },
+    })
 }
 
 fn admin_usage_curl_shell_quote(value: &str) -> String {

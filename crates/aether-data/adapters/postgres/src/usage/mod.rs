@@ -1674,6 +1674,21 @@ fn push_postgres_usage_diagnostic_kind_filter(
         .push_bind(diagnostic_kind.to_string());
 }
 
+fn push_postgres_usage_api_key_id_filter(
+    builder: &mut QueryBuilder<'_, Postgres>,
+    has_where: &mut bool,
+    api_key_id: Option<&str>,
+) {
+    let Some(api_key_id) = api_key_id.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+
+    push_postgres_usage_where(builder, has_where);
+    builder
+        .push("\"usage\".api_key_id = ")
+        .push_bind(api_key_id.to_string());
+}
+
 const USAGE_PROVIDER_IDENTITY_FILTER_SQL: &str = r#" AND (
       (
         BTRIM(COALESCE("usage".provider_id, '')) <> ''
@@ -3046,6 +3061,11 @@ OR (\"usage\".error_message IS NOT NULL AND BTRIM(\"usage\".error_message) <> ''
             &mut has_where,
             query.diagnostic_kind.as_deref(),
         );
+        push_postgres_usage_api_key_id_filter(
+            &mut builder,
+            &mut has_where,
+            query.api_key_id.as_deref(),
+        );
 
         if query.newest_first {
             builder.push(" ORDER BY \"usage\".created_at DESC, \"usage\".id ASC");
@@ -3355,6 +3375,11 @@ OR (\"usage\".error_message IS NOT NULL AND BTRIM(\"usage\".error_message) <> ''
             &mut builder,
             &mut has_where,
             query.diagnostic_kind.as_deref(),
+        );
+        push_postgres_usage_api_key_id_filter(
+            &mut builder,
+            &mut has_where,
+            query.api_key_id.as_deref(),
         );
 
         let row = builder

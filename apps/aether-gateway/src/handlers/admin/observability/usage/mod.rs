@@ -5,6 +5,7 @@ use axum::{body::Body, response::Response};
 mod analytics;
 mod analytics_routes;
 mod detail_routes;
+mod diagnostics_routes;
 mod replay;
 mod summary_routes;
 
@@ -17,8 +18,20 @@ pub(crate) async fn maybe_build_local_admin_usage_response(
         return Ok(None);
     };
 
-    if decision.route_family.as_deref() != Some("usage_manage") {
+    let route_family = decision.route_family.as_deref();
+    if !matches!(
+        route_family,
+        Some("usage_manage") | Some("diagnostics_manage")
+    ) {
         return Ok(None);
+    }
+
+    if route_family == Some("diagnostics_manage") {
+        return diagnostics_routes::maybe_build_local_admin_diagnostics_response(
+            state,
+            request_context,
+        )
+        .await;
     }
 
     if let Some(response) = detail_routes::maybe_build_local_admin_usage_detail_response(

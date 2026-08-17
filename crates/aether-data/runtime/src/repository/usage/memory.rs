@@ -264,6 +264,11 @@ fn usage_matches_list_query(item: &StoredRequestUsageAudit, query: &UsageAuditLi
             return false;
         }
     }
+    if let Some(api_key_id) = query.api_key_id.as_deref().map(str::trim) {
+        if !api_key_id.is_empty() && item.api_key_id.as_deref() != Some(api_key_id) {
+            return false;
+        }
+    }
     if let Some(provider_name) = query.provider_name.as_deref() {
         if item.provider_name != provider_name {
             return false;

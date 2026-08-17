@@ -76,6 +76,7 @@ mod admin_adaptive;
 mod admin_api_keys;
 mod admin_billing;
 mod admin_core;
+mod admin_diagnostics;
 mod admin_endpoints;
 mod admin_monitoring;
 mod admin_oauth;

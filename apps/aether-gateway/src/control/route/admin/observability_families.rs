@@ -481,6 +481,42 @@ pub(super) fn classify_admin_observability_family_route(
     } else if method == http::Method::GET
         && matches!(
             normalized_path,
+            "/api/admin/diagnostics" | "/api/admin/diagnostics/"
+        )
+    {
+        Some(classified(
+            "admin_proxy",
+            "diagnostics_manage",
+            "list",
+            "admin:usage",
+            false,
+        ))
+    } else if method == http::Method::GET
+        && normalized_path_no_trailing.starts_with("/api/admin/diagnostics/")
+        && normalized_path_no_trailing.matches('/').count() == 4
+    {
+        Some(classified(
+            "admin_proxy",
+            "diagnostics_manage",
+            "detail",
+            "admin:usage",
+            false,
+        ))
+    } else if method == http::Method::POST
+        && normalized_path_no_trailing.starts_with("/api/admin/diagnostics/")
+        && normalized_path_no_trailing.ends_with("/summarize")
+        && normalized_path_no_trailing.matches('/').count() == 5
+    {
+        Some(classified(
+            "admin_proxy",
+            "diagnostics_manage",
+            "summarize",
+            "admin:usage",
+            false,
+        ))
+    } else if method == http::Method::GET
+        && matches!(
+            normalized_path,
             "/api/admin/stats/providers/quota-usage" | "/api/admin/stats/providers/quota-usage/"
         )
     {

@@ -2111,6 +2111,15 @@ fn usage_audit_list_and_count_filter_by_error_diagnostic_kind() {
         })
         .expect("count_usage_audits path should be present");
     assert!(count_path.contains("push_postgres_usage_diagnostic_kind_filter"));
+
+    // The api_key_id filter helper exists and is applied by list and count.
+    let api_key_helper = source
+        .split("fn push_postgres_usage_api_key_id_filter")
+        .nth(1)
+        .expect("api_key_id filter helper should be present");
+    assert!(api_key_helper.contains("api_key_id = "));
+    assert!(list_path.contains("push_postgres_usage_api_key_id_filter"));
+    assert!(count_path.contains("push_postgres_usage_api_key_id_filter"));
 }
 
 #[tokio::test]

@@ -215,6 +215,20 @@ impl<'a> AdminAppState<'a> {
             .map_err(|err| GatewayError::Internal(err.to_string()))
     }
 
+    pub(crate) async fn find_request_usage_by_request_id(
+        &self,
+        request_id: &str,
+    ) -> Result<
+        Option<aether_data_contracts::repository::usage::StoredRequestUsageAudit>,
+        GatewayError,
+    > {
+        self.app
+            .data
+            .find_request_usage_by_request_id(request_id)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
     pub(crate) async fn list_request_usage_by_ids(
         &self,
         usage_ids: &[String],

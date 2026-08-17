@@ -381,6 +381,7 @@ pub(crate) fn admin_proxy_local_requires_buffered_body(
                 | (Some("pool_manage"), http::Method::PATCH, Some("batch_update_keys"))
                 | (Some("pool_manage"), http::Method::POST, Some("resolve_selection"))
                 | (Some("usage_manage"), http::Method::POST, Some("replay"))
+                | (Some("diagnostics_manage"), http::Method::POST, Some("summarize"))
                 | (Some("wallets_manage"), http::Method::POST, Some("adjust_balance"))
                 | (Some("wallets_manage"), http::Method::POST, Some("recharge_balance"))
                 | (Some("wallets_manage"), http::Method::POST, Some("process_refund"))

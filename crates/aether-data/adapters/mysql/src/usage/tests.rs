@@ -25,6 +25,9 @@ fn mysql_usage_audit_list_filters_by_error_diagnostic_kind() {
     assert!(source.contains(
         "JSON_UNQUOTE(JSON_EXTRACT(`usage`.request_metadata, '$.error_diagnostic.kind'))"
     ));
+    // The shared list filter also narrows by api_key_id.
+    assert!(source.contains("api_key_id"));
+    assert!(source.contains("`usage`.api_key_id = "));
 }
 
 #[test]

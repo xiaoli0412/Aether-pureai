@@ -901,6 +901,14 @@ OR (error_message IS NOT NULL AND TRIM(error_message) <> ''))",
                 .push_bind(diagnostic_kind.to_string());
         }
     }
+    if let Some(api_key_id) = query.api_key_id.as_deref().map(str::trim) {
+        if !api_key_id.is_empty() {
+            push_sqlite_usage_where(builder, has_where);
+            builder
+                .push("api_key_id = ")
+                .push_bind(api_key_id.to_string());
+        }
+    }
 }
 
 fn push_sqlite_usage_excluded_status_codes(
@@ -941,6 +949,7 @@ fn push_sqlite_usage_keyword_filters(
             is_stream: query.is_stream,
             error_only: query.error_only,
             diagnostic_kind: None,
+            api_key_id: None,
             limit: None,
             offset: None,
             newest_first: query.newest_first,

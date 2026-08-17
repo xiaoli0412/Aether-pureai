@@ -1779,6 +1779,7 @@ async fn sqlite_usage_list_and_count_filter_by_error_diagnostic_kind() {
             "upstream_status": 400
         }
     }));
+    upstream_4xx.api_key_id = Some("api-key-2".to_string());
     writer
         .upsert(upstream_4xx)
         .await
@@ -1828,6 +1829,29 @@ async fn sqlite_usage_list_and_count_filter_by_error_diagnostic_kind() {
         .expect("diagnostic + user list should load");
     assert_eq!(empty_for_user.len(), 1);
     assert_eq!(empty_for_user[0].request_id, "request-empty");
+
+    // Filtering by api_key_id narrows to the matching key's rows.
+    let key_two = reader
+        .list_usage_audits(&UsageAuditListQuery {
+            api_key_id: Some("api-key-2".to_string()),
+            newest_first: true,
+            ..UsageAuditListQuery::default()
+        })
+        .await
+        .expect("api_key_id list should load");
+    assert_eq!(key_two.len(), 1);
+    assert_eq!(key_two[0].request_id, "request-4xx");
+
+    // api_key_id combines with diagnostic_kind.
+    let key_two_empty = reader
+        .list_usage_audits(&UsageAuditListQuery {
+            api_key_id: Some("api-key-2".to_string()),
+            diagnostic_kind: Some("empty_response".to_string()),
+            ..UsageAuditListQuery::default()
+        })
+        .await
+        .expect("api_key_id + kind list should load");
+    assert_eq!(key_two_empty.len(), 0);
 
     // No diagnostic filter returns every row (query plan unchanged otherwise).
     let unfiltered = reader

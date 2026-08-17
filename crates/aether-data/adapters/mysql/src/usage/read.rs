@@ -602,6 +602,17 @@ OR (`usage`.error_message IS NOT NULL AND TRIM(`usage`.error_message) <> ''))",
             .push("JSON_UNQUOTE(JSON_EXTRACT(`usage`.request_metadata, '$.error_diagnostic.kind')) = ")
             .push_bind(diagnostic_kind.to_string());
     }
+    if let Some(api_key_id) = query
+        .api_key_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        push_where(builder, has_where);
+        builder
+            .push("`usage`.api_key_id = ")
+            .push_bind(api_key_id.to_string());
+    }
     Ok(())
 }
 
@@ -626,6 +637,7 @@ fn push_keyword_filters(
             is_stream: query.is_stream,
             error_only: query.error_only,
             diagnostic_kind: None,
+            api_key_id: None,
             limit: None,
             offset: None,
             newest_first: query.newest_first,
