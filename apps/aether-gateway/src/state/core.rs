@@ -403,6 +403,9 @@ impl AppState {
             local_execution_runtime_miss_diagnostics: Arc::new(DashMap::new()),
             admin_monitoring_error_stats_reset_at: Arc::new(StdMutex::new(None)),
             provider_delete_tasks: Arc::new(StdMutex::new(HashMap::new())),
+            empty_response_budget: Arc::new(
+                crate::execution_runtime::empty_response::EmptyResponseBudgetTracker::new(),
+            ),
             #[cfg(test)]
             turnstile_siteverify_url_override: None,
             #[cfg(test)]

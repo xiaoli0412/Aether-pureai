@@ -7,6 +7,7 @@ pub(crate) mod admission;
 pub(crate) mod attempt_lifecycle;
 mod chatgpt_web_image;
 mod constants;
+pub(crate) mod empty_response;
 mod fallback;
 mod grok;
 mod kiro_cache;

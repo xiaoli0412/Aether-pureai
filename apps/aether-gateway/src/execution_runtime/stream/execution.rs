@@ -5824,7 +5824,9 @@ async fn execute_stream_from_frame_stream_with_retry_scope(
             if let Some(retry_scope) = retry_scope_out.as_deref_mut() {
                 *retry_scope = ai_attempt_retry_scope_from_failure_disposition(failure_disposition);
             }
-            if failure_disposition.preserve_upstream_error {
+            if failure_disposition.preserve_upstream_error
+                || failover_analysis.preserve_upstream_error_on_retry
+            {
                 if let Some(retry_fallback) = retry_fallback_out.as_deref_mut() {
                     let mut fallback_headers = headers.clone();
                     apply_endpoint_response_header_rules(

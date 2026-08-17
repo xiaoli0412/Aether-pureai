@@ -2762,7 +2762,9 @@ async fn execute_execution_runtime_sync_impl(
             *retry_scope =
                 ai_attempt_retry_scope_from_failure_disposition(failure_disposition);
         }
-        if failure_disposition.preserve_upstream_error {
+        if failure_disposition.preserve_upstream_error
+            || local_failover_analysis.preserve_upstream_error_on_retry
+        {
             if let Some(retry_fallback) = retry_fallback_out.as_deref_mut() {
                 let mut fallback_headers = headers.clone();
                 apply_endpoint_response_header_rules(

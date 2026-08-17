@@ -1858,9 +1858,9 @@ fn local_candidate_failure_should_invalidate_affinity(
         LocalFailoverClassification::RetrySuccessPattern
         | LocalFailoverClassification::RetryStatusCode
         | LocalFailoverClassification::RetryUpstreamFailure => true,
-        LocalFailoverClassification::UseDefault | LocalFailoverClassification::StopStatusCode => {
-            status_code >= 500
-        }
+        LocalFailoverClassification::UseDefault
+        | LocalFailoverClassification::StopStatusCode
+        | LocalFailoverClassification::StopPassthrough => status_code >= 500,
         LocalFailoverClassification::StopErrorPattern
         | LocalFailoverClassification::StopExecutionError
         | LocalFailoverClassification::StopCyberPolicy => false,

@@ -34,6 +34,7 @@ pub(crate) enum LocalFailoverClassification {
     StopErrorPattern,
     StopExecutionError,
     StopCyberPolicy,
+    StopPassthrough,
     RetrySuccessPattern,
     RetryStatusCode,
     RetryUpstreamFailure,
@@ -47,6 +48,7 @@ impl LocalFailoverClassification {
             Self::StopErrorPattern => "stop_error_pattern",
             Self::StopExecutionError => "stop_execution_error",
             Self::StopCyberPolicy => "stop_cyber_policy",
+            Self::StopPassthrough => "stop_passthrough",
             Self::RetrySuccessPattern => "retry_success_pattern",
             Self::RetryStatusCode => "retry_status_code",
             Self::RetryUpstreamFailure => "retry_upstream_failure",
@@ -72,7 +74,7 @@ impl LocalTransportFailoverClassification {
 pub(crate) const fn classify_local_transport_error(
     policy: &LocalFailoverPolicy,
 ) -> LocalTransportFailoverClassification {
-    if policy.stop_on_transport_errors {
+    if policy.stop_on_transport_errors || policy.upstream_passthrough_mode {
         LocalTransportFailoverClassification::StopTransportError
     } else {
         LocalTransportFailoverClassification::RetryTransportError
@@ -147,7 +149,8 @@ pub(crate) const fn failure_disposition_from_local_classification(
         LocalFailoverClassification::StopStatusCode
         | LocalFailoverClassification::StopErrorPattern
         | LocalFailoverClassification::StopExecutionError
-        | LocalFailoverClassification::StopCyberPolicy => FailureDisposition::new(
+        | LocalFailoverClassification::StopCyberPolicy
+        | LocalFailoverClassification::StopPassthrough => FailureDisposition::new(
             FailureRetryAction::Stop,
             FailureScope::None,
             FailureTokenAction::None,
@@ -185,6 +188,7 @@ pub(crate) const fn classify_anthropic_failure_disposition(
             | LocalFailoverClassification::StopErrorPattern
             | LocalFailoverClassification::StopExecutionError
             | LocalFailoverClassification::StopCyberPolicy
+            | LocalFailoverClassification::StopPassthrough
     ) {
         let generic = failure_disposition_from_local_classification(classification, status_code);
         return match status_code {
@@ -300,6 +304,14 @@ pub(crate) fn classify_local_failover(
     policy: &LocalFailoverPolicy,
     input: LocalFailoverInput<'_>,
 ) -> LocalFailoverClassification {
+    if policy.upstream_passthrough_mode {
+        return if input.status_code >= 400 {
+            LocalFailoverClassification::StopPassthrough
+        } else {
+            LocalFailoverClassification::UseDefault
+        };
+    }
+
     if policy.stop_status_codes.contains(&input.status_code) {
         return LocalFailoverClassification::StopStatusCode;
     }
@@ -945,5 +957,83 @@ mod tests {
         );
         assert_eq!(overloaded.retry_action, FailureRetryAction::Stop);
         assert_eq!(overloaded.failure_scope, FailureScope::Provider);
+    }
+
+    #[test]
+    fn passthrough_mode_stops_every_error_status_without_retry() {
+        let policy = LocalFailoverPolicy {
+            upstream_passthrough_mode: true,
+            retry_client_errors_by_default: true,
+            ..LocalFailoverPolicy::default()
+        };
+        for status_code in [400u16, 404, 429, 500, 502, 503] {
+            let classification =
+                classify_local_failover(&policy, LocalFailoverInput::new(status_code, None));
+            assert_eq!(
+                classification,
+                LocalFailoverClassification::StopPassthrough,
+                "status {status_code}"
+            );
+            let disposition =
+                failure_disposition_from_local_classification(classification, status_code);
+            assert_eq!(disposition.retry_action, FailureRetryAction::Stop);
+            assert!(disposition.preserve_upstream_error);
+        }
+        assert_eq!(
+            classify_local_failover(&policy, LocalFailoverInput::new(200, None)),
+            LocalFailoverClassification::UseDefault
+        );
+    }
+
+    #[test]
+    fn passthrough_mode_overrides_failover_rules_and_success_patterns() {
+        let policy = LocalFailoverPolicy {
+            upstream_passthrough_mode: true,
+            continue_status_codes: [429].into_iter().collect(),
+            success_failover_patterns: vec![super::LocalFailoverRegexRule {
+                pattern: "quota".to_string(),
+                status_codes: [200].into_iter().collect(),
+            }],
+            ..LocalFailoverPolicy::default()
+        };
+        assert_eq!(
+            classify_local_failover(&policy, LocalFailoverInput::new(429, None)),
+            LocalFailoverClassification::StopPassthrough
+        );
+        assert_eq!(
+            classify_local_failover(
+                &policy,
+                LocalFailoverInput::new(200, Some("{\"error\":{\"code\":\"quota\"}}"))
+            ),
+            LocalFailoverClassification::UseDefault
+        );
+    }
+
+    #[test]
+    fn passthrough_mode_stops_transport_errors() {
+        let policy = LocalFailoverPolicy {
+            upstream_passthrough_mode: true,
+            ..LocalFailoverPolicy::default()
+        };
+        assert_eq!(
+            classify_local_transport_error(&policy),
+            LocalTransportFailoverClassification::StopTransportError
+        );
+    }
+
+    #[test]
+    fn anthropic_passthrough_stop_never_rotates_credentials() {
+        for status_code in [401u16, 429, 500] {
+            let disposition = classify_anthropic_failure_disposition(
+                LocalFailoverClassification::StopPassthrough,
+                status_code,
+            );
+            assert_eq!(
+                disposition.retry_action,
+                FailureRetryAction::Stop,
+                "status {status_code}"
+            );
+            assert!(disposition.preserve_upstream_error);
+        }
     }
 }

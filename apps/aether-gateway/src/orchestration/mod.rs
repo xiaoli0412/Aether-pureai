@@ -58,8 +58,10 @@ pub(crate) use self::policy::{
     append_local_failover_policy_to_value, codex_cyber_flag_passthrough_enabled,
     cyber_continue_failover_enabled, local_failover_policy_from_report_context,
     local_failover_policy_from_transport, resolve_local_failover_policy,
-    responses_websocket_adapter, LocalFailoverPolicy, LocalFailoverRegexRule,
-    ResponsesWebSocketAdapter, CYBER_CONTINUE_FAILOVER_CONFIG_KEY, RESPONSES_WEBSOCKET_CONFIG_KEY,
+    responses_websocket_adapter, LocalEmptyResponseExhaustion, LocalEmptyResponsePolicy,
+    LocalFailoverPolicy, LocalFailoverRegexRule, ResponsesWebSocketAdapter,
+    CYBER_CONTINUE_FAILOVER_CONFIG_KEY, RESPONSES_WEBSOCKET_CONFIG_KEY,
+    UPSTREAM_POLICY_CONFIG_KEY,
 };
 pub(crate) use self::recovery::{
     analyze_local_failover, analyze_local_transport_error, apply_provider_failure_disposition,
@@ -128,6 +130,7 @@ pub(crate) fn build_local_error_flow_metadata(
             | LocalFailoverClassification::StopErrorPattern
             | LocalFailoverClassification::StopExecutionError
             | LocalFailoverClassification::StopCyberPolicy
+            | LocalFailoverClassification::StopPassthrough
     );
     let propagation = match analysis.decision {
         LocalFailoverDecision::RetryNextCandidate => "suppressed",

@@ -9,6 +9,25 @@ use crate::AppState;
 
 pub(crate) const CYBER_CONTINUE_FAILOVER_CONFIG_KEY: &str = "cyber_continue_failover";
 pub(crate) const RESPONSES_WEBSOCKET_CONFIG_KEY: &str = "responses_websocket";
+pub(crate) const UPSTREAM_POLICY_CONFIG_KEY: &str = "upstream_policy";
+
+/// How a provider responds once its empty-response retry budget is exhausted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LocalEmptyResponseExhaustion {
+    /// Deliver the empty success response to the client unchanged.
+    Passthrough,
+    /// Keep the legacy failure flow (retry/503 exhaustion).
+    Error,
+}
+
+/// Provider-scoped policy for "HTTP 200 without visible output" responses,
+/// e.g. Gemini risk-control blocks proxied through passthrough upstreams.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LocalEmptyResponsePolicy {
+    pub(crate) detect: bool,
+    pub(crate) max_attempts: u64,
+    pub(crate) on_exhausted: LocalEmptyResponseExhaustion,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LocalFailoverPolicy {
@@ -22,6 +41,10 @@ pub(crate) struct LocalFailoverPolicy {
     pub(crate) error_stop_patterns: Vec<LocalFailoverRegexRule>,
     pub(crate) stop_cyber_policy_errors: bool,
     pub(crate) retry_client_errors_by_default: bool,
+    pub(crate) upstream_passthrough_mode: bool,
+    pub(crate) enforced_max_attempts: Option<u64>,
+    pub(crate) passthrough_upstream_errors: bool,
+    pub(crate) empty_response_policy: Option<LocalEmptyResponsePolicy>,
 }
 
 impl Default for LocalFailoverPolicy {
@@ -37,6 +60,10 @@ impl Default for LocalFailoverPolicy {
             error_stop_patterns: Vec::new(),
             stop_cyber_policy_errors: true,
             retry_client_errors_by_default: true,
+            upstream_passthrough_mode: false,
+            enforced_max_attempts: None,
+            passthrough_upstream_errors: false,
+            empty_response_policy: None,
         }
     }
 }
@@ -120,6 +147,8 @@ pub(crate) fn local_failover_policy_from_transport(
                 .and_then(|value| u64::try_from(value).ok())
         });
 
+    let upstream_policy = parse_upstream_policy_fields(provider_config.and_then(Value::as_object));
+
     LocalFailoverPolicy {
         max_retries,
         max_transfer_count: provider_config
@@ -135,6 +164,10 @@ pub(crate) fn local_failover_policy_from_transport(
                 &transport.endpoint.api_format,
             ),
         stop_cyber_policy_errors: true,
+        upstream_passthrough_mode: upstream_policy.passthrough_mode,
+        enforced_max_attempts: upstream_policy.max_attempts,
+        passthrough_upstream_errors: upstream_policy.passthrough_errors,
+        empty_response_policy: upstream_policy.empty_response,
         stop_status_codes: rules
             .map(|value| {
                 parse_status_code_set(
@@ -182,6 +215,8 @@ pub(crate) fn local_failover_policy_from_report_context(
         .get("local_failover_policy")?
         .as_object()?;
 
+    let upstream_policy = parse_upstream_policy_fields(Some(object));
+
     Some(LocalFailoverPolicy {
         max_retries: object.get("max_retries").and_then(parse_u64_value),
         max_transfer_count: object
@@ -214,6 +249,10 @@ pub(crate) fn local_failover_policy_from_report_context(
             .get("retry_client_errors_by_default")
             .and_then(Value::as_bool)
             .unwrap_or(true),
+        upstream_passthrough_mode: upstream_policy.passthrough_mode,
+        enforced_max_attempts: upstream_policy.max_attempts,
+        passthrough_upstream_errors: upstream_policy.passthrough_errors,
+        empty_response_policy: upstream_policy.empty_response,
     })
 }
 
@@ -276,7 +315,95 @@ fn local_failover_policy_to_value(policy: &LocalFailoverPolicy) -> Value {
         "error_stop_patterns": policy.error_stop_patterns.iter().map(local_failover_regex_rule_to_value).collect::<Vec<_>>(),
         "stop_cyber_policy_errors": policy.stop_cyber_policy_errors,
         "retry_client_errors_by_default": policy.retry_client_errors_by_default,
+        UPSTREAM_POLICY_CONFIG_KEY: upstream_policy_to_value(policy),
     })
+}
+
+#[derive(Debug, Clone, Default)]
+struct UpstreamPolicyFields {
+    passthrough_mode: bool,
+    max_attempts: Option<u64>,
+    passthrough_errors: bool,
+    empty_response: Option<LocalEmptyResponsePolicy>,
+}
+
+fn parse_upstream_policy_fields(
+    container: Option<&serde_json::Map<String, Value>>,
+) -> UpstreamPolicyFields {
+    let Some(policy) = container
+        .and_then(|config| config.get(UPSTREAM_POLICY_CONFIG_KEY))
+        .and_then(Value::as_object)
+    else {
+        return UpstreamPolicyFields::default();
+    };
+
+    UpstreamPolicyFields {
+        passthrough_mode: policy
+            .get("mode")
+            .and_then(Value::as_str)
+            .is_some_and(|mode| mode.trim().eq_ignore_ascii_case("full_passthrough")),
+        max_attempts: policy
+            .get("max_attempts")
+            .and_then(parse_u64_value)
+            .filter(|value| (1..=100).contains(value)),
+        passthrough_errors: policy
+            .get("passthrough_upstream_errors")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        empty_response: policy
+            .get("empty_response")
+            .and_then(Value::as_object)
+            .map(parse_empty_response_policy),
+    }
+}
+
+fn parse_empty_response_policy(
+    empty: &serde_json::Map<String, Value>,
+) -> LocalEmptyResponsePolicy {
+    LocalEmptyResponsePolicy {
+        detect: empty
+            .get("detect")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        max_attempts: empty
+            .get("max_attempts")
+            .and_then(parse_u64_value)
+            .map(|value| value.min(100))
+            .unwrap_or(1),
+        on_exhausted: match empty.get("on_exhausted").and_then(Value::as_str) {
+            Some(value) if value.trim().eq_ignore_ascii_case("passthrough") => {
+                LocalEmptyResponseExhaustion::Passthrough
+            }
+            _ => LocalEmptyResponseExhaustion::Error,
+        },
+    }
+}
+
+fn upstream_policy_to_value(policy: &LocalFailoverPolicy) -> Value {
+    let mut object = serde_json::Map::new();
+    if policy.upstream_passthrough_mode {
+        object.insert("mode".to_string(), json!("full_passthrough"));
+    }
+    if let Some(max_attempts) = policy.enforced_max_attempts {
+        object.insert("max_attempts".to_string(), json!(max_attempts));
+    }
+    if policy.passthrough_upstream_errors {
+        object.insert("passthrough_upstream_errors".to_string(), json!(true));
+    }
+    if let Some(empty) = policy.empty_response_policy.as_ref() {
+        object.insert(
+            "empty_response".to_string(),
+            json!({
+                "detect": empty.detect,
+                "max_attempts": empty.max_attempts,
+                "on_exhausted": match empty.on_exhausted {
+                    LocalEmptyResponseExhaustion::Passthrough => "passthrough",
+                    LocalEmptyResponseExhaustion::Error => "error",
+                },
+            }),
+        );
+    }
+    Value::Object(object)
 }
 
 pub(crate) fn codex_cyber_flag_passthrough_enabled(
@@ -427,8 +554,8 @@ mod tests {
     use super::{
         append_local_failover_policy_to_value, local_failover_policy_from_report_context,
         local_failover_policy_from_transport, responses_websocket_adapter,
-        responses_websocket_enabled, LocalFailoverPolicy, LocalFailoverRegexRule,
-        ResponsesWebSocketAdapter,
+        responses_websocket_enabled, LocalEmptyResponseExhaustion, LocalEmptyResponsePolicy,
+        LocalFailoverPolicy, LocalFailoverRegexRule, ResponsesWebSocketAdapter,
     };
     use crate::provider_transport::snapshot::{
         GatewayProviderTransportEndpoint, GatewayProviderTransportKey,
@@ -539,6 +666,10 @@ mod tests {
                 }],
                 stop_cyber_policy_errors: true,
                 retry_client_errors_by_default: true,
+                upstream_passthrough_mode: false,
+                enforced_max_attempts: None,
+                passthrough_upstream_errors: false,
+                empty_response_policy: None,
             })
         );
     }
@@ -689,5 +820,131 @@ mod tests {
         assert!(!ResponsesWebSocketAdapter::Codex.supports_provider_type("openai"));
         assert!(ResponsesWebSocketAdapter::Standard.supports_provider_type("custom"));
         assert!(!ResponsesWebSocketAdapter::Standard.supports_provider_type("codex"));
+    }
+
+    #[test]
+    fn upstream_policy_parses_full_passthrough_mode() {
+        let policy = local_failover_policy_from_transport(&sample_transport(
+            None,
+            None,
+            Some(json!({
+                "upstream_policy": { "mode": "full_passthrough" }
+            })),
+        ));
+        assert!(policy.upstream_passthrough_mode);
+        assert!(policy.empty_response_policy.is_none());
+    }
+
+    #[test]
+    fn upstream_policy_parses_capped_retry_and_empty_response() {
+        let policy = local_failover_policy_from_transport(&sample_transport(
+            None,
+            None,
+            Some(json!({
+                "upstream_policy": {
+                    "max_attempts": 2,
+                    "passthrough_upstream_errors": true,
+                    "empty_response": {
+                        "detect": true,
+                        "max_attempts": 1,
+                        "on_exhausted": "passthrough"
+                    }
+                }
+            })),
+        ));
+        assert!(!policy.upstream_passthrough_mode);
+        assert_eq!(policy.enforced_max_attempts, Some(2));
+        assert!(policy.passthrough_upstream_errors);
+        assert_eq!(
+            policy.empty_response_policy,
+            Some(LocalEmptyResponsePolicy {
+                detect: true,
+                max_attempts: 1,
+                on_exhausted: LocalEmptyResponseExhaustion::Passthrough,
+            })
+        );
+    }
+
+    #[test]
+    fn upstream_policy_round_trips_through_report_context() {
+        let report_context = append_local_failover_policy_to_value(
+            json!({}),
+            &sample_transport(
+                None,
+                None,
+                Some(json!({
+                    "upstream_policy": {
+                        "mode": "full_passthrough",
+                        "max_attempts": 3,
+                        "passthrough_upstream_errors": true,
+                        "empty_response": {
+                            "detect": true,
+                            "max_attempts": 0,
+                            "on_exhausted": "error"
+                        }
+                    }
+                })),
+            ),
+        );
+        let parsed = local_failover_policy_from_report_context(Some(&report_context)).unwrap();
+        assert!(parsed.upstream_passthrough_mode);
+        assert_eq!(parsed.enforced_max_attempts, Some(3));
+        assert!(parsed.passthrough_upstream_errors);
+        assert_eq!(
+            parsed.empty_response_policy,
+            Some(LocalEmptyResponsePolicy {
+                detect: true,
+                max_attempts: 0,
+                on_exhausted: LocalEmptyResponseExhaustion::Error,
+            })
+        );
+    }
+
+    #[test]
+    fn upstream_policy_defaults_preserve_legacy_behavior() {
+        let policy = local_failover_policy_from_transport(&sample_transport(None, None, None));
+        assert!(!policy.upstream_passthrough_mode);
+        assert_eq!(policy.enforced_max_attempts, None);
+        assert!(!policy.passthrough_upstream_errors);
+        assert!(policy.empty_response_policy.is_none());
+    }
+
+    #[test]
+    fn upstream_policy_ignores_malformed_values() {
+        let policy = local_failover_policy_from_transport(&sample_transport(
+            None,
+            None,
+            Some(json!({
+                "upstream_policy": {
+                    "mode": "nonsense",
+                    "max_attempts": "lots",
+                    "passthrough_upstream_errors": "yes",
+                    "empty_response": { "on_exhausted": "explode" }
+                }
+            })),
+        ));
+        assert!(!policy.upstream_passthrough_mode);
+        assert_eq!(policy.enforced_max_attempts, None);
+        assert!(!policy.passthrough_upstream_errors);
+        let empty = policy.empty_response_policy.unwrap();
+        assert!(!empty.detect);
+        assert_eq!(empty.max_attempts, 1);
+        assert_eq!(empty.on_exhausted, LocalEmptyResponseExhaustion::Error);
+    }
+
+    #[test]
+    fn upstream_policy_clamps_out_of_range_attempt_budgets() {
+        let policy = local_failover_policy_from_transport(&sample_transport(
+            None,
+            None,
+            Some(json!({
+                "upstream_policy": {
+                    "max_attempts": 101,
+                    "empty_response": { "max_attempts": 999 }
+                }
+            })),
+        ));
+        assert_eq!(policy.enforced_max_attempts, None);
+        assert_eq!(policy.empty_response_policy.unwrap().max_attempts, 100);
     }
 }

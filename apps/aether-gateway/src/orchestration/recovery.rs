@@ -26,6 +26,9 @@ impl LocalFailoverDecision {
 pub(crate) struct LocalFailoverAnalysis {
     pub(crate) classification: LocalFailoverClassification,
     pub(crate) decision: LocalFailoverDecision,
+    /// Whether a retryable attempt must still preserve its upstream error
+    /// response so exhaustion can return it to the client unchanged.
+    pub(crate) preserve_upstream_error_on_retry: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +42,7 @@ impl LocalFailoverAnalysis {
         Self {
             classification: LocalFailoverClassification::UseDefault,
             decision: LocalFailoverDecision::UseDefault,
+            preserve_upstream_error_on_retry: false,
         }
     }
 }
@@ -51,6 +55,8 @@ pub(crate) fn analyze_local_failover(
     LocalFailoverAnalysis {
         classification,
         decision: decision_from_classification(classification),
+        preserve_upstream_error_on_retry: policy.upstream_passthrough_mode
+            || policy.passthrough_upstream_errors,
     }
 }
 
@@ -100,6 +106,7 @@ pub(crate) fn apply_provider_failure_disposition(
     LocalFailoverAnalysis {
         classification: analysis.classification,
         decision,
+        preserve_upstream_error_on_retry: analysis.preserve_upstream_error_on_retry,
     }
 }
 
@@ -118,7 +125,8 @@ const fn decision_from_classification(
         LocalFailoverClassification::StopStatusCode
         | LocalFailoverClassification::StopErrorPattern
         | LocalFailoverClassification::StopExecutionError
-        | LocalFailoverClassification::StopCyberPolicy => LocalFailoverDecision::StopLocalFailover,
+        | LocalFailoverClassification::StopCyberPolicy
+        | LocalFailoverClassification::StopPassthrough => LocalFailoverDecision::StopLocalFailover,
         LocalFailoverClassification::RetrySuccessPattern
         | LocalFailoverClassification::RetryStatusCode
         | LocalFailoverClassification::RetryUpstreamFailure => {
@@ -279,5 +287,74 @@ mod tests {
             apply_provider_failure_disposition("claude:messages", 200, analysis).decision,
             LocalFailoverDecision::UseDefault
         );
+    }
+
+    #[test]
+    fn passthrough_mode_stops_errors_and_flags_upstream_error_preservation() {
+        let policy = LocalFailoverPolicy {
+            upstream_passthrough_mode: true,
+            ..LocalFailoverPolicy::default()
+        };
+        for status_code in [400u16, 429, 500, 502, 503] {
+            let analysis = analyze_local_failover(
+                &policy,
+                LocalFailoverInput::new(status_code, Some("{\"error\":{\"message\":\"boom\"}}")),
+            );
+            assert_eq!(
+                analysis.decision,
+                LocalFailoverDecision::StopLocalFailover,
+                "status {status_code}"
+            );
+            assert_eq!(
+                analysis.classification,
+                LocalFailoverClassification::StopPassthrough,
+                "status {status_code}"
+            );
+            assert!(
+                analysis.preserve_upstream_error_on_retry,
+                "status {status_code}"
+            );
+            let applied =
+                apply_provider_failure_disposition("claude:messages", status_code, analysis);
+            assert_eq!(
+                applied.decision,
+                LocalFailoverDecision::StopLocalFailover,
+                "anthropic status {status_code} must not rotate credentials in passthrough mode"
+            );
+            assert!(applied.preserve_upstream_error_on_retry);
+        }
+        let success = analyze_local_failover(&policy, LocalFailoverInput::new(200, None));
+        assert_eq!(success.decision, LocalFailoverDecision::UseDefault);
+    }
+
+    #[test]
+    fn passthrough_mode_stops_transport_errors() {
+        let policy = LocalFailoverPolicy {
+            upstream_passthrough_mode: true,
+            ..LocalFailoverPolicy::default()
+        };
+        assert_eq!(
+            analyze_local_transport_error(&policy).decision,
+            LocalFailoverDecision::StopLocalFailover
+        );
+    }
+
+    #[test]
+    fn passthrough_upstream_errors_flag_preserves_retryable_errors() {
+        let policy = LocalFailoverPolicy {
+            passthrough_upstream_errors: true,
+            ..LocalFailoverPolicy::default()
+        };
+        let analysis =
+            analyze_local_failover(&policy, LocalFailoverInput::new(500, Some("{\"error\":{}}")));
+        assert_eq!(analysis.decision, LocalFailoverDecision::RetryNextCandidate);
+        assert!(analysis.preserve_upstream_error_on_retry);
+
+        let default_policy = LocalFailoverPolicy::default();
+        let default_analysis = analyze_local_failover(
+            &default_policy,
+            LocalFailoverInput::new(500, Some("{\"error\":{}}")),
+        );
+        assert!(!default_analysis.preserve_upstream_error_on_retry);
     }
 }

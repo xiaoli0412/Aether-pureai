@@ -328,9 +328,9 @@ fn local_candidate_failure_should_project_health(
         LocalFailoverClassification::RetrySuccessPattern
         | LocalFailoverClassification::RetryStatusCode
         | LocalFailoverClassification::RetryUpstreamFailure => true,
-        LocalFailoverClassification::UseDefault | LocalFailoverClassification::StopStatusCode => {
-            status_code >= 500
-        }
+        LocalFailoverClassification::UseDefault
+        | LocalFailoverClassification::StopStatusCode
+        | LocalFailoverClassification::StopPassthrough => status_code >= 500,
         LocalFailoverClassification::StopErrorPattern
         | LocalFailoverClassification::StopExecutionError
         | LocalFailoverClassification::StopCyberPolicy => false,

@@ -98,6 +98,7 @@ pub(crate) async fn execute_sync_plan_and_reports_with_transfer_tracker<T>(
 where
     T: AiExecutionAttempt + Send + Sync + 'static,
 {
+    let plan_and_reports = truncate_plan_attempts_by_enforced_cap(plan_and_reports);
     let candidate_count = plan_and_reports.len();
     let first_provider = plan_and_reports
         .first()
@@ -378,6 +379,7 @@ pub(crate) async fn execute_stream_plan_and_reports_with_transfer_tracker<T>(
 where
     T: AiExecutionAttempt + Send + Sync + 'static,
 {
+    let plan_and_reports = truncate_plan_attempts_by_enforced_cap(plan_and_reports);
     let candidate_count = plan_and_reports.len();
     let first_provider = plan_and_reports
         .first()
@@ -788,6 +790,8 @@ where
 {
     let mut last_attempted = None;
     let mut fallback_response = None;
+    let mut attempts_started: u64 = 0;
+    let mut enforced_max_attempts: Option<u64> = None;
 
     loop {
         let next_started_at = std::time::Instant::now();
@@ -801,6 +805,9 @@ where
         let Some(attempt) = next_attempt else {
             break;
         };
+        if enforced_max_attempts.is_none() {
+            enforced_max_attempts = local_enforced_max_attempts_for_attempt(&attempt);
+        }
         if port.should_skip_attempt(&attempt).await? {
             let provider_id = attempt.execution_plan().provider_id.clone();
             port.mark_unused_attempts(vec![attempt]).await?;
@@ -839,6 +846,7 @@ where
                 if attempt_fallback_response.is_some() {
                     fallback_response = attempt_fallback_response;
                 }
+                attempts_started += 1;
                 apply_attempt_retry_scope(source, &attempt, scope).await?;
             }
         }
@@ -853,6 +861,10 @@ where
         // Only retain a deep plan/context snapshot when this candidate really
         // failed and exhaustion reporting will need it.
         last_attempted = Some((attempt.execution_plan().clone(), attempt.report_context()));
+
+        if enforced_max_attempts.is_some_and(|cap| attempts_started >= cap) {
+            break;
+        }
     }
 
     if let Some(response) = fallback_response {
@@ -887,6 +899,39 @@ where
         AiAttemptRetryScope::Endpoint => source.skip_endpoint(plan.endpoint_id.as_str()).await,
         AiAttemptRetryScope::Provider => source.skip_provider(plan.provider_id.as_str()).await,
     }
+}
+
+fn local_enforced_max_attempts_for_attempt<Attempt>(attempt: &Attempt) -> Option<u64>
+where
+    Attempt: AiExecutionAttempt,
+{
+    let owned_report_context = if attempt.report_context_ref().is_none() {
+        attempt.report_context()
+    } else {
+        None
+    };
+    let report_context = attempt
+        .report_context_ref()
+        .or(owned_report_context.as_ref());
+    local_failover_policy_from_report_context(report_context)
+        .and_then(|policy| policy.enforced_max_attempts)
+}
+
+fn truncate_plan_attempts_by_enforced_cap<T>(mut plan_and_reports: Vec<T>) -> Vec<T>
+where
+    T: AiExecutionAttempt,
+{
+    let Some(cap) = plan_and_reports
+        .iter()
+        .find_map(local_enforced_max_attempts_for_attempt)
+    else {
+        return plan_and_reports;
+    };
+    let cap = usize::try_from(cap).unwrap_or(usize::MAX);
+    if plan_and_reports.len() > cap {
+        plan_and_reports.truncate(cap.max(1));
+    }
+    plan_and_reports
 }
 
 async fn next_execution_attempt_with_timeout<Source, Attempt>(

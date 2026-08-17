@@ -442,6 +442,8 @@ pub struct AppState {
         Arc<DashMap<String, LocalExecutionRuntimeMissDiagnostic>>,
     pub(crate) admin_monitoring_error_stats_reset_at: Arc<StdMutex<Option<u64>>>,
     pub(crate) provider_delete_tasks: Arc<StdMutex<HashMap<String, LocalProviderDeleteTaskState>>>,
+    pub(crate) empty_response_budget:
+        Arc<crate::execution_runtime::empty_response::EmptyResponseBudgetTracker>,
     #[cfg(test)]
     pub(crate) turnstile_siteverify_url_override: Option<String>,
     #[cfg(test)]
