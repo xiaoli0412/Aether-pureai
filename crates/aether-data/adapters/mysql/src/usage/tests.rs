@@ -18,6 +18,16 @@ async fn repository_builds_from_lazy_pool() {
 }
 
 #[test]
+fn mysql_usage_audit_list_filters_by_error_diagnostic_kind() {
+    let source = include_str!("read.rs");
+    // The shared list filter extracts the diagnostic kind from request_metadata.
+    assert!(source.contains("diagnostic_kind"));
+    assert!(source.contains(
+        "JSON_UNQUOTE(JSON_EXTRACT(`usage`.request_metadata, '$.error_diagnostic.kind'))"
+    ));
+}
+
+#[test]
 fn mysql_usage_daily_heatmap_reads_imported_daily_aggregates() {
     let source = include_str!("../usage.rs");
     assert!(source.contains("summarize_usage_daily_heatmap_from_daily_aggregates"));

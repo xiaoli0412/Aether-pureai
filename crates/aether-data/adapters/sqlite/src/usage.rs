@@ -893,6 +893,14 @@ OR COALESCE(status_code, 0) >= 400 \
 OR (error_message IS NOT NULL AND TRIM(error_message) <> ''))",
         );
     }
+    if let Some(diagnostic_kind) = query.diagnostic_kind.as_deref().map(str::trim) {
+        if !diagnostic_kind.is_empty() {
+            push_sqlite_usage_where(builder, has_where);
+            builder
+                .push("CAST(json_extract(request_metadata, '$.error_diagnostic.kind') AS TEXT) = ")
+                .push_bind(diagnostic_kind.to_string());
+        }
+    }
 }
 
 fn push_sqlite_usage_excluded_status_codes(
@@ -932,6 +940,7 @@ fn push_sqlite_usage_keyword_filters(
             exclude_status_codes: query.exclude_status_codes.clone(),
             is_stream: query.is_stream,
             error_only: query.error_only,
+            diagnostic_kind: None,
             limit: None,
             offset: None,
             newest_first: query.newest_first,

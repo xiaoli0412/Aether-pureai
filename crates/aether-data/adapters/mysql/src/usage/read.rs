@@ -591,6 +591,17 @@ OR COALESCE(`usage`.status_code, 0) >= 400 \
 OR (`usage`.error_message IS NOT NULL AND TRIM(`usage`.error_message) <> ''))",
         );
     }
+    if let Some(diagnostic_kind) = query
+        .diagnostic_kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        push_where(builder, has_where);
+        builder
+            .push("JSON_UNQUOTE(JSON_EXTRACT(`usage`.request_metadata, '$.error_diagnostic.kind')) = ")
+            .push_bind(diagnostic_kind.to_string());
+    }
     Ok(())
 }
 
@@ -614,6 +625,7 @@ fn push_keyword_filters(
             exclude_status_codes: query.exclude_status_codes.clone(),
             is_stream: query.is_stream,
             error_only: query.error_only,
+            diagnostic_kind: None,
             limit: None,
             offset: None,
             newest_first: query.newest_first,

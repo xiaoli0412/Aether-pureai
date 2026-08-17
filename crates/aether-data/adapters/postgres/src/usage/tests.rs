@@ -2079,6 +2079,40 @@ fn api_key_leaderboard_user_filter_keeps_aggregates_with_historical_identity_evi
     assert!(aggregate_path.contains("GROUP BY identity_usage.api_key_id"));
 }
 
+#[test]
+fn usage_audit_list_and_count_filter_by_error_diagnostic_kind() {
+    let source = include_str!("mod.rs");
+
+    // The helper exists and extracts the diagnostic kind from request_metadata.
+    let helper = source
+        .split("fn push_postgres_usage_diagnostic_kind_filter")
+        .nth(1)
+        .expect("diagnostic kind filter helper should be present");
+    assert!(helper.contains("request_metadata->'error_diagnostic'->>'kind'"));
+    assert!(helper.contains("push_bind"));
+
+    // Both list and count invoke the helper so filtering is consistent.
+    let list_path = source
+        .split("pub async fn list_usage_audits(")
+        .nth(1)
+        .and_then(|tail| {
+            tail.split("pub async fn list_usage_audits_by_keyword_search")
+                .next()
+        })
+        .expect("list_usage_audits path should be present");
+    assert!(list_path.contains("push_postgres_usage_diagnostic_kind_filter"));
+
+    let count_path = source
+        .split("pub async fn count_usage_audits(")
+        .nth(1)
+        .and_then(|tail| {
+            tail.split("pub async fn count_usage_audits_by_keyword_search")
+                .next()
+        })
+        .expect("count_usage_audits path should be present");
+    assert!(count_path.contains("push_postgres_usage_diagnostic_kind_filter"));
+}
+
 #[tokio::test]
 async fn validates_upsert_before_hitting_database() {
     let factory = PostgresPoolFactory::new(PostgresPoolConfig {

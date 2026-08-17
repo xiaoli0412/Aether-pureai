@@ -1656,6 +1656,24 @@ AND lower(BTRIM(COALESCE(\"usage\".provider_name, ''))) NOT IN ('unknown', 'unkn
     );
 }
 
+fn push_postgres_usage_diagnostic_kind_filter(
+    builder: &mut QueryBuilder<'_, Postgres>,
+    has_where: &mut bool,
+    diagnostic_kind: Option<&str>,
+) {
+    let Some(diagnostic_kind) = diagnostic_kind
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+
+    push_postgres_usage_where(builder, has_where);
+    builder
+        .push("\"usage\".request_metadata->'error_diagnostic'->>'kind' = ")
+        .push_bind(diagnostic_kind.to_string());
+}
+
 const USAGE_PROVIDER_IDENTITY_FILTER_SQL: &str = r#" AND (
       (
         BTRIM(COALESCE("usage".provider_id, '')) <> ''
@@ -3023,6 +3041,11 @@ OR COALESCE(\"usage\".status_code, 0) >= 400 \
 OR (\"usage\".error_message IS NOT NULL AND BTRIM(\"usage\".error_message) <> ''))",
             );
         }
+        push_postgres_usage_diagnostic_kind_filter(
+            &mut builder,
+            &mut has_where,
+            query.diagnostic_kind.as_deref(),
+        );
 
         if query.newest_first {
             builder.push(" ORDER BY \"usage\".created_at DESC, \"usage\".id ASC");
@@ -3328,6 +3351,11 @@ OR COALESCE(\"usage\".status_code, 0) >= 400 \
 OR (\"usage\".error_message IS NOT NULL AND BTRIM(\"usage\".error_message) <> ''))",
             );
         }
+        push_postgres_usage_diagnostic_kind_filter(
+            &mut builder,
+            &mut has_where,
+            query.diagnostic_kind.as_deref(),
+        );
 
         let row = builder
             .build()

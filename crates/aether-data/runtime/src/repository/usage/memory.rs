@@ -322,6 +322,23 @@ fn usage_matches_list_query(item: &StoredRequestUsageAudit, query: &UsageAuditLi
     {
         return false;
     }
+    if let Some(diagnostic_kind) = query
+        .diagnostic_kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let matches = item
+            .request_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("error_diagnostic"))
+            .and_then(|diagnostic| diagnostic.get("kind"))
+            .and_then(Value::as_str)
+            .is_some_and(|kind| kind == diagnostic_kind);
+        if !matches {
+            return false;
+        }
+    }
 
     true
 }

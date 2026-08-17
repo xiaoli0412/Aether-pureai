@@ -1746,6 +1746,101 @@ WHERE request_id = 'request-1'
 }
 
 #[tokio::test]
+async fn sqlite_usage_list_and_count_filter_by_error_diagnostic_kind() {
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .expect("sqlite pool should connect");
+    run_migrations(&pool)
+        .await
+        .expect("sqlite migrations should run");
+
+    let writer = SqliteUsageWriteRepository::new(pool.clone());
+
+    let mut empty_response = sample_usage("request-empty", "failed", "void", 1_000);
+    empty_response.request_metadata = Some(serde_json::json!({
+        "trace_id": "trace-empty",
+        "error_diagnostic": {
+            "kind": "empty_response",
+            "upstream_status": 200
+        }
+    }));
+    writer
+        .upsert(empty_response)
+        .await
+        .expect("empty-response usage should upsert");
+
+    let mut upstream_4xx = sample_usage("request-4xx", "failed", "void", 1_010);
+    upstream_4xx.request_metadata = Some(serde_json::json!({
+        "trace_id": "trace-4xx",
+        "error_diagnostic": {
+            "kind": "upstream_4xx",
+            "upstream_status": 400
+        }
+    }));
+    writer
+        .upsert(upstream_4xx)
+        .await
+        .expect("4xx usage should upsert");
+
+    let clean = sample_usage("request-clean", "completed", "settled", 1_020);
+    writer
+        .upsert(clean)
+        .await
+        .expect("clean usage should upsert");
+
+    let reader = SqliteUsageReadRepository::new(pool);
+
+    // Filtering by kind returns only matching rows and leaves others out.
+    let empty_only = reader
+        .list_usage_audits(&UsageAuditListQuery {
+            diagnostic_kind: Some("empty_response".to_string()),
+            newest_first: true,
+            ..UsageAuditListQuery::default()
+        })
+        .await
+        .expect("diagnostic list should load");
+    assert_eq!(empty_only.len(), 1);
+    assert_eq!(empty_only[0].request_id, "request-empty");
+
+    // Count honors the same filter.
+    let four_xx_count = reader
+        .count_usage_audits(&UsageAuditListQuery {
+            diagnostic_kind: Some("upstream_4xx".to_string()),
+            ..UsageAuditListQuery::default()
+        })
+        .await
+        .expect("diagnostic count should load");
+    assert_eq!(four_xx_count, 1);
+
+    // Combining kind with user_id still narrows correctly.
+    let empty_for_user = reader
+        .list_usage_audits(&UsageAuditListQuery {
+            diagnostic_kind: Some("empty_response".to_string()),
+            user_id: Some("user-1".to_string()),
+            created_from_unix_secs: Some(999),
+            created_until_unix_secs: Some(1_030),
+            newest_first: true,
+            ..UsageAuditListQuery::default()
+        })
+        .await
+        .expect("diagnostic + user list should load");
+    assert_eq!(empty_for_user.len(), 1);
+    assert_eq!(empty_for_user[0].request_id, "request-empty");
+
+    // No diagnostic filter returns every row (query plan unchanged otherwise).
+    let unfiltered = reader
+        .list_usage_audits(&UsageAuditListQuery {
+            newest_first: true,
+            ..UsageAuditListQuery::default()
+        })
+        .await
+        .expect("unfiltered list should load");
+    assert_eq!(unfiltered.len(), 3);
+}
+
+#[tokio::test]
 async fn sqlite_usage_daily_heatmap_reads_imported_daily_aggregates() {
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(1)

@@ -954,6 +954,10 @@ pub struct UsageAuditListQuery {
     pub exclude_status_codes: Vec<u16>,
     pub is_stream: Option<bool>,
     pub error_only: bool,
+    /// Filters audits whose `request_metadata.error_diagnostic.kind` equals this
+    /// value (e.g. `empty_response`, `upstream_4xx`, `upstream_5xx`). None = no
+    /// diagnostic filter; the query plan is unchanged.
+    pub diagnostic_kind: Option<String>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
     pub newest_first: bool,
