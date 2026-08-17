@@ -5431,6 +5431,30 @@ fn should_skip_direct_finalize_prefetch(
     .commits_on_response_headers()
 }
 
+/// Whether the provider's embedded upstream policy asks for pre-commit empty
+/// stream detection on this request. Without an embedded policy the legacy
+/// commit-on-headers behavior is preserved for every format.
+fn local_empty_response_policy_active(
+    report_context: Option<&Value>,
+    provider_api_format: &str,
+) -> bool {
+    let Some(policy) =
+        crate::orchestration::local_failover_policy_from_report_context(report_context)
+    else {
+        return false;
+    };
+    if policy.upstream_passthrough_mode {
+        return false;
+    }
+    let Some(empty_policy) = policy.empty_response_policy else {
+        return false;
+    };
+    let is_gemini =
+        crate::ai_serving::normalize_api_format_alias(provider_api_format)
+            == "gemini:generate_content";
+    is_gemini || empty_policy.detect
+}
+
 fn prefetched_openai_responses_body_has_output_boundary(body: &[u8]) -> bool {
     let Ok(text) = std::str::from_utf8(body) else {
         return true;
@@ -6047,6 +6071,10 @@ async fn execute_stream_from_frame_stream_with_retry_scope(
     let prefetch_for_cyber_failover =
         is_openai_responses_family_format(plan.provider_api_format.as_str())
             && cyber_continue_failover_enabled(state).await;
+    let empty_response_policy_active = local_empty_response_policy_active(
+        report_context.as_ref(),
+        plan.provider_api_format.as_str(),
+    );
     let stream_commit_policy = StreamCommitPolicy::for_response(
         direct_stream_finalize_kind.is_some(),
         upstream_content_type,
@@ -6054,7 +6082,7 @@ async fn execute_stream_from_frame_stream_with_retry_scope(
         plan.client_api_format.as_str(),
         private_stream_normalizer.is_some(),
         local_stream_rewriter.is_some(),
-        prefetch_for_cyber_failover,
+        prefetch_for_cyber_failover || empty_response_policy_active,
     );
     let reuse_committed_precommit =
         stream_precommit_committed && stream_commit_policy.is_native_anthropic();
@@ -6652,6 +6680,78 @@ async fn execute_stream_from_frame_stream_with_retry_scope(
                 }
                 StreamFramePayload::Headers { .. } => {}
             }
+        }
+    }
+    if reached_eof
+        && empty_response_policy_active
+        && (200..300).contains(&status_code)
+        && crate::execution_runtime::empty_response::prefetched_stream_body_lacks_visible_output(
+            &provider_prefetched_body,
+        )
+    {
+        let observed = state
+            .empty_response_budget
+            .record_empty_response(request_id);
+        let upstream_policy = crate::orchestration::local_failover_policy_from_report_context(
+            report_context.as_ref(),
+        );
+        let empty_policy = upstream_policy
+            .as_ref()
+            .and_then(|policy| policy.empty_response_policy);
+        let provider_format_is_gemini =
+            crate::ai_serving::normalize_api_format_alias(plan.provider_api_format.as_str())
+                == "gemini:generate_content";
+        match crate::execution_runtime::empty_response::empty_success_action(
+            provider_format_is_gemini,
+            empty_policy.as_ref(),
+            observed.saturating_sub(1),
+        ) {
+            crate::execution_runtime::empty_response::EmptySuccessAction::RewriteRetryable => {
+                warn!(
+                    event_name = "stream_empty_response_retry_scheduled",
+                    log_type = "event",
+                    trace_id = %trace_id,
+                    request_id = %request_id_for_log,
+                    candidate_id = ?candidate_id,
+                    plan_kind,
+                    provider_name,
+                    endpoint_id = %plan.endpoint_id,
+                    key_id = %plan.key_id,
+                    model_name,
+                    empty_response_observations = observed,
+                    "gateway detected empty upstream stream before commit and scheduled retry"
+                );
+                let error_body_json = serde_json::json!({
+                    "error": {
+                        "message": "upstream stream ended without visible model output",
+                        "type": "invalid_provider_success",
+                        "code": "empty_upstream_response"
+                    }
+                });
+                return handle_prefetch_provider_private_stream_error(
+                    state,
+                    trace_id,
+                    decision,
+                    &plan,
+                    report_context,
+                    request_id,
+                    candidate_id,
+                    report_kind.as_deref().unwrap_or_default(),
+                    headers,
+                    prefetched_usage_telemetry.clone(),
+                    &provider_prefetched_body,
+                    status_code,
+                    http::StatusCode::BAD_GATEWAY.as_u16(),
+                    error_body_json,
+                    retry_scope_out.as_deref_mut(),
+                    retry_fallback_out.as_deref_mut(),
+                )
+                .await;
+            }
+            crate::execution_runtime::empty_response::EmptySuccessAction::Passthrough => {
+                state.empty_response_budget.forget(request_id);
+            }
+            crate::execution_runtime::empty_response::EmptySuccessAction::None => {}
         }
     }
     if stream_commit_gate.is_uncommitted() {

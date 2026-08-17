@@ -113,6 +113,7 @@ const OPENAI_IMAGE_SYNC_JSON_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(
 const OPENAI_IMAGE_SYNC_JSON_HEARTBEAT_BYTES: &[u8] = b"\n";
 const OPENAI_IMAGE_SYNC_PROGRESS_WRITE_INTERVAL: Duration = Duration::from_secs(5);
 const INVALID_GEMINI_PROVIDER_SUCCESS_MESSAGE: &str = "Provider returned HTTP 200 but the Gemini response did not contain visible model output; refusing to finalize it as a successful response.";
+const INVALID_PROVIDER_EMPTY_SUCCESS_MESSAGE: &str = "Provider returned HTTP 200 but the response did not contain visible model output; treating it as an empty upstream response.";
 
 fn elapsed_ms_since(started_at: Instant) -> u64 {
     started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
@@ -903,6 +904,100 @@ fn provider_api_format_is_gemini_generate_content(
         .and_then(Value::as_str)
         .unwrap_or(plan.provider_api_format.as_str());
     crate::ai_serving::normalize_api_format_alias(provider_api_format) == "gemini:generate_content"
+}
+
+/// Unified empty-success detection honoring the provider's upstream policy.
+/// Gemini-native formats keep the legacy detection unconditionally; other
+/// formats participate only when `empty_response.detect` is enabled. The
+/// per-request budget decides between retrying and passing the empty success
+/// response through to the client.
+fn local_empty_provider_success_message(
+    state: &AppState,
+    plan: &ExecutionPlan,
+    report_context: Option<&Value>,
+    status_code: u16,
+    body_json: Option<&Value>,
+    body_bytes: &[u8],
+) -> Option<&'static str> {
+    let policy = crate::orchestration::local_failover_policy_from_report_context(report_context);
+    if policy
+        .as_ref()
+        .is_some_and(|policy| policy.upstream_passthrough_mode)
+    {
+        return None;
+    }
+    let is_gemini = provider_api_format_is_gemini_generate_content(plan, report_context);
+    let empty_policy = policy
+        .as_ref()
+        .and_then(|policy| policy.empty_response_policy);
+
+    let detected = if is_gemini {
+        invalid_gemini_provider_success_message(plan, report_context, status_code, body_json)
+            .is_some()
+            || invalid_gemini_provider_stream_success_message(
+                plan,
+                report_context,
+                status_code,
+                body_json,
+                body_bytes,
+                !body_bytes.is_empty(),
+            )
+            .is_some()
+    } else if status_code < 400 && empty_policy.is_some_and(|policy| policy.detect) {
+        sync_success_body_lacks_visible_output(body_json, body_bytes)
+    } else {
+        false
+    };
+
+    if !detected {
+        return None;
+    }
+
+    let observed = state
+        .empty_response_budget
+        .record_empty_response(plan.request_id.as_str());
+    match crate::execution_runtime::empty_response::empty_success_action(
+        is_gemini,
+        empty_policy.as_ref(),
+        observed.saturating_sub(1),
+    ) {
+        crate::execution_runtime::empty_response::EmptySuccessAction::RewriteRetryable => Some(
+            if is_gemini {
+                INVALID_GEMINI_PROVIDER_SUCCESS_MESSAGE
+            } else {
+                INVALID_PROVIDER_EMPTY_SUCCESS_MESSAGE
+            },
+        ),
+        crate::execution_runtime::empty_response::EmptySuccessAction::Passthrough => {
+            state.empty_response_budget.forget(plan.request_id.as_str());
+            None
+        }
+        crate::execution_runtime::empty_response::EmptySuccessAction::None => None,
+    }
+}
+
+/// Whether a non-Gemini success body is an "empty" chat-shaped response
+/// (HTTP 200 without visible model output). Bodies that do not carry a
+/// chat-like container are left untouched so image/embedding-shaped payloads
+/// are never misclassified.
+fn sync_success_body_lacks_visible_output(body_json: Option<&Value>, body_bytes: &[u8]) -> bool {
+    let Some(body_json) = body_json else {
+        let text = std::str::from_utf8(body_bytes).unwrap_or_default();
+        return text.trim().is_empty();
+    };
+    if body_json
+        .as_object()
+        .is_some_and(|object| object.get("error").is_some_and(|error| !error.is_null()))
+    {
+        return false;
+    }
+    let has_chat_container = ["choices", "candidates", "output"]
+        .iter()
+        .any(|key| body_json.get(*key).is_some_and(Value::is_array));
+    if !has_chat_container {
+        return false;
+    }
+    !crate::ai_serving::gemini_generate_content_response_has_visible_output(body_json)
 }
 
 fn invalid_gemini_provider_success_execution_error(message: &str) -> ExecutionError {
@@ -2548,22 +2643,14 @@ async fn execute_execution_runtime_sync_impl(
         let mut headers = std::mem::take(&mut result.headers);
         let (body_bytes, mut body_json, body_base64) =
             decode_execution_result_body(result.body.take(), &mut headers)?;
-        if let Some(message) = invalid_gemini_provider_success_message(
+        if let Some(message) = local_empty_provider_success_message(
+            state,
             &plan,
             report_context.as_ref(),
             result.status_code,
             body_json.as_ref(),
-        )
-        .or_else(|| {
-            invalid_gemini_provider_stream_success_message(
-                &plan,
-                report_context.as_ref(),
-                result.status_code,
-                body_json.as_ref(),
-                &body_bytes,
-                body_base64.is_some(),
-            )
-        }) {
+            &body_bytes,
+        ) {
             result.status_code = StatusCode::BAD_GATEWAY.as_u16();
             result.error = Some(invalid_gemini_provider_success_execution_error(message));
             if let Some(error_body) =
