@@ -632,10 +632,24 @@ fn with_sync_error_trace_context(
         None,
         None,
     );
-    with_error_flow_report_context(
+    let flow_context = with_error_flow_report_context(
         upstream_context.as_ref().or(report_context),
         build_local_error_flow_metadata(status_code, response_text, local_failover_analysis),
+    );
+    let Some(kind) = crate::orchestration::error_diagnostic_kind(status_code, response_text) else {
+        return flow_context;
+    };
+    crate::orchestration::with_error_diagnostic_report_context(
+        flow_context
+            .as_ref()
+            .or(upstream_context.as_ref())
+            .or(report_context),
+        kind,
+        status_code,
+        Some(local_failover_analysis),
+        response_text,
     )
+    .or(flow_context)
 }
 
 fn build_sync_report_payload(

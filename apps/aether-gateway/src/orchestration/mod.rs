@@ -160,6 +160,72 @@ pub(crate) fn with_error_flow_report_context(
     Some(Value::Object(object))
 }
 
+/// Attaches a compact, queryable `error_diagnostic` marker to the report
+/// context so the usage pipeline can persist WHY a request failed (empty
+/// upstream response, upstream 4xx/5xx) without storing full bodies again.
+pub(crate) fn with_error_diagnostic_report_context(
+    report_context: Option<&Value>,
+    kind: &str,
+    upstream_status: u16,
+    analysis: Option<LocalFailoverAnalysis>,
+    response_text: Option<&str>,
+) -> Option<Value> {
+    let mut object = report_context?.as_object()?.clone();
+    let mut diagnostic = Map::new();
+    diagnostic.insert("kind".to_string(), json!(kind));
+    diagnostic.insert("upstream_status".to_string(), json!(upstream_status));
+    if let Some(analysis) = analysis {
+        diagnostic.insert(
+            "classification".to_string(),
+            json!(analysis.classification.as_str()),
+        );
+        diagnostic.insert("decision".to_string(), json!(analysis.decision.as_str()));
+    }
+    if let Some(message) =
+        crate::orchestration::classifier::local_failover_error_message(response_text)
+    {
+        diagnostic.insert(
+            "message".to_string(),
+            json!(limit_error_diagnostic_message(&message)),
+        );
+    }
+    object.insert("error_diagnostic".to_string(), Value::Object(diagnostic));
+    Some(Value::Object(object))
+}
+
+/// Classifies the diagnostic kind for a failed upstream response observed in
+/// the candidate failover path.
+pub(crate) fn error_diagnostic_kind(
+    status_code: u16,
+    response_text: Option<&str>,
+) -> Option<&'static str> {
+    if response_text.is_some_and(|text| {
+        text.contains("did not contain visible model output")
+            || text.contains("without visible model output")
+    }) {
+        return Some("empty_response");
+    }
+    if (400..500).contains(&status_code) {
+        return Some("upstream_4xx");
+    }
+    if status_code >= 500 {
+        return Some("upstream_5xx");
+    }
+    None
+}
+
+fn limit_error_diagnostic_message(message: &str) -> String {
+    const MAX_ERROR_DIAGNOSTIC_MESSAGE_BYTES: usize = 1024;
+    if message.len() <= MAX_ERROR_DIAGNOSTIC_MESSAGE_BYTES {
+        return message.to_string();
+    }
+    let mut end = MAX_ERROR_DIAGNOSTIC_MESSAGE_BYTES;
+    while !message.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &message[..end])
+}
+
 pub(crate) fn with_upstream_response_report_context(
     report_context: Option<&Value>,
     status_code: u16,
@@ -280,4 +346,92 @@ fn trace_header_is_sensitive(name: &str) -> bool {
     ]
     .iter()
     .any(|candidate| name.trim().eq_ignore_ascii_case(candidate))
+}
+
+#[cfg(test)]
+mod error_diagnostic_tests {
+    use super::{
+        error_diagnostic_kind, limit_error_diagnostic_message, with_error_diagnostic_report_context,
+    };
+    use crate::orchestration::{
+        LocalFailoverAnalysis, LocalFailoverClassification, LocalFailoverDecision,
+    };
+    use serde_json::json;
+
+    fn sample_analysis() -> LocalFailoverAnalysis {
+        LocalFailoverAnalysis {
+            classification: LocalFailoverClassification::RetryUpstreamFailure,
+            decision: LocalFailoverDecision::RetryNextCandidate,
+            preserve_upstream_error_on_retry: false,
+        }
+    }
+
+    #[test]
+    fn diagnostic_kind_detects_empty_response_messages() {
+        assert_eq!(
+            error_diagnostic_kind(
+                502,
+                Some("Provider returned HTTP 200 but the response did not contain visible model output; treating it as an empty upstream response.")
+            ),
+            Some("empty_response")
+        );
+        assert_eq!(
+            error_diagnostic_kind(
+                502,
+                Some("{\"error\":{\"message\":\"upstream stream ended without visible model output\"}}")
+            ),
+            Some("empty_response")
+        );
+    }
+
+    #[test]
+    fn diagnostic_kind_maps_status_bands() {
+        assert_eq!(
+            error_diagnostic_kind(400, Some("bad")),
+            Some("upstream_4xx")
+        );
+        assert_eq!(error_diagnostic_kind(429, None), Some("upstream_4xx"));
+        assert_eq!(error_diagnostic_kind(503, None), Some("upstream_5xx"));
+        assert_eq!(error_diagnostic_kind(200, None), None);
+    }
+
+    #[test]
+    fn diagnostic_marker_attaches_to_report_context() {
+        let context = with_error_diagnostic_report_context(
+            Some(&json!({"request_id": "req-1"})),
+            "upstream_5xx",
+            503,
+            Some(sample_analysis()),
+            Some("{\"error\":{\"message\":\"boom\"}}"),
+        )
+        .expect("diagnostic context");
+        assert_eq!(context["request_id"], json!("req-1"));
+        assert_eq!(context["error_diagnostic"]["kind"], json!("upstream_5xx"));
+        assert_eq!(context["error_diagnostic"]["upstream_status"], json!(503));
+        assert_eq!(
+            context["error_diagnostic"]["classification"],
+            json!("retry_upstream_failure")
+        );
+        assert_eq!(
+            context["error_diagnostic"]["decision"],
+            json!("retry_next_candidate")
+        );
+        assert_eq!(context["error_diagnostic"]["message"], json!("boom"));
+    }
+
+    #[test]
+    fn diagnostic_marker_requires_report_context() {
+        assert!(
+            with_error_diagnostic_report_context(None, "upstream_4xx", 400, None, None).is_none()
+        );
+    }
+
+    #[test]
+    fn diagnostic_message_is_truncated_to_metadata_limits() {
+        let long = "x".repeat(4000);
+        let limited = limit_error_diagnostic_message(&long);
+        assert!(limited.len() <= 1028);
+        assert!(limited.ends_with("..."));
+        assert_eq!(limit_error_diagnostic_message("short"), "short");
+    }
 }

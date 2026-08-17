@@ -368,6 +368,7 @@ fn copy_allowed_metadata_fields(source: &Map<String, Value>, target: &mut Map<St
     copy_number(source, target, "end_to_end_first_byte_time_ms");
     copy_bool(source, target, "transport_error");
     copy_non_empty_string(source, target, "transport_error_type");
+    copy_non_null_value(source, target, "error_diagnostic");
     copy_non_null_value(source, target, "billing_snapshot");
     copy_non_empty_string(source, target, "billing_snapshot_schema_version");
     copy_non_empty_string(source, target, "billing_snapshot_status");
@@ -428,6 +429,7 @@ fn move_allowed_metadata_fields(mut source: Map<String, Value>, target: &mut Map
     remove_number(&mut source, target, "end_to_end_first_byte_time_ms");
     remove_bool(&mut source, target, "transport_error");
     remove_non_empty_string(&mut source, target, "transport_error_type");
+    remove_non_null_value(&mut source, target, "error_diagnostic");
     remove_non_null_value(&mut source, target, "billing_snapshot");
     remove_non_empty_string(&mut source, target, "billing_snapshot_schema_version");
     remove_non_empty_string(&mut source, target, "billing_snapshot_status");
@@ -777,6 +779,31 @@ mod tests {
                 "max_usage_rate": 100.0
             }
         })
+    }
+
+    #[test]
+    fn sanitizes_request_metadata_preserves_error_diagnostic_and_drops_secrets() {
+        let metadata = sanitize_usage_request_metadata(Some(json!({
+            "trace_id": "trace-diag",
+            "error_diagnostic": {
+                "kind": "empty_response",
+                "upstream_status": 200,
+                "message": "empty upstream response"
+            },
+            "original_headers": {"authorization": "Bearer secret"}
+        })))
+        .expect("metadata should remain");
+        assert_eq!(
+            metadata,
+            json!({
+                "trace_id": "trace-diag",
+                "error_diagnostic": {
+                    "kind": "empty_response",
+                    "upstream_status": 200,
+                    "message": "empty upstream response"
+                }
+            })
+        );
     }
 
     #[test]

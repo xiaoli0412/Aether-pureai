@@ -636,10 +636,24 @@ fn with_stream_error_trace_context(
         None,
         None,
     );
-    with_error_flow_report_context(
+    let flow_context = with_error_flow_report_context(
         upstream_context.as_ref().or(report_context),
         build_local_error_flow_metadata(status_code, response_text, local_failover_analysis),
+    );
+    let Some(kind) = crate::orchestration::error_diagnostic_kind(status_code, response_text) else {
+        return flow_context;
+    };
+    crate::orchestration::with_error_diagnostic_report_context(
+        flow_context
+            .as_ref()
+            .or(upstream_context.as_ref())
+            .or(report_context),
+        kind,
+        status_code,
+        Some(local_failover_analysis),
+        response_text,
     )
+    .or(flow_context)
 }
 
 #[allow(clippy::too_many_arguments)] // stream report payload assembly mirrors runtime state
@@ -6727,12 +6741,20 @@ async fn execute_stream_from_frame_stream_with_retry_scope(
                         "code": "empty_upstream_response"
                     }
                 });
+                let diagnostic_report_context =
+                    crate::orchestration::with_error_diagnostic_report_context(
+                        report_context.as_ref(),
+                        "empty_response",
+                        status_code,
+                        None,
+                        Some("upstream stream ended without visible model output"),
+                    );
                 return handle_prefetch_provider_private_stream_error(
                     state,
                     trace_id,
                     decision,
                     &plan,
-                    report_context,
+                    diagnostic_report_context.or(report_context),
                     request_id,
                     candidate_id,
                     report_kind.as_deref().unwrap_or_default(),
@@ -6742,8 +6764,8 @@ async fn execute_stream_from_frame_stream_with_retry_scope(
                     status_code,
                     http::StatusCode::BAD_GATEWAY.as_u16(),
                     error_body_json,
-                    retry_scope_out.as_deref_mut(),
-                    retry_fallback_out.as_deref_mut(),
+                    retry_scope_out,
+                    retry_fallback_out,
                 )
                 .await;
             }
