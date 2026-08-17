@@ -345,8 +345,10 @@ mod tests {
             passthrough_upstream_errors: true,
             ..LocalFailoverPolicy::default()
         };
-        let analysis =
-            analyze_local_failover(&policy, LocalFailoverInput::new(500, Some("{\"error\":{}}")));
+        let analysis = analyze_local_failover(
+            &policy,
+            LocalFailoverInput::new(500, Some("{\"error\":{}}")),
+        );
         assert_eq!(analysis.decision, LocalFailoverDecision::RetryNextCandidate);
         assert!(analysis.preserve_upstream_error_on_retry);
 

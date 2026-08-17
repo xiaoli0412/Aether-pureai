@@ -961,13 +961,13 @@ fn local_empty_provider_success_message(
         empty_policy.as_ref(),
         observed.saturating_sub(1),
     ) {
-        crate::execution_runtime::empty_response::EmptySuccessAction::RewriteRetryable => Some(
-            if is_gemini {
+        crate::execution_runtime::empty_response::EmptySuccessAction::RewriteRetryable => {
+            Some(if is_gemini {
                 INVALID_GEMINI_PROVIDER_SUCCESS_MESSAGE
             } else {
                 INVALID_PROVIDER_EMPTY_SUCCESS_MESSAGE
-            },
-        ),
+            })
+        }
         crate::execution_runtime::empty_response::EmptySuccessAction::Passthrough => {
             state.empty_response_budget.forget(plan.request_id.as_str());
             None

@@ -334,15 +334,12 @@ fn validate_upstream_policy_value(value: &serde_json::Value) -> Result<(), Strin
         }
         if let Some(detect) = empty.get("detect") {
             if !detect.is_boolean() {
-                return Err(
-                    "config.upstream_policy.empty_response.detect 必须是布尔值".to_string(),
-                );
+                return Err("config.upstream_policy.empty_response.detect 必须是布尔值".to_string());
             }
         }
         if let Some(max_attempts) = empty.get("max_attempts") {
             let max_attempts = max_attempts.as_u64().ok_or_else(|| {
-                "config.upstream_policy.empty_response.max_attempts 必须是 0-100 的整数"
-                    .to_string()
+                "config.upstream_policy.empty_response.max_attempts 必须是 0-100 的整数".to_string()
             })?;
             if max_attempts > 100 {
                 return Err(

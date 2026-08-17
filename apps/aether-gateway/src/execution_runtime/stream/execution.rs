@@ -5449,9 +5449,8 @@ fn local_empty_response_policy_active(
     let Some(empty_policy) = policy.empty_response_policy else {
         return false;
     };
-    let is_gemini =
-        crate::ai_serving::normalize_api_format_alias(provider_api_format)
-            == "gemini:generate_content";
+    let is_gemini = crate::ai_serving::normalize_api_format_alias(provider_api_format)
+        == "gemini:generate_content";
     is_gemini || empty_policy.detect
 }
 

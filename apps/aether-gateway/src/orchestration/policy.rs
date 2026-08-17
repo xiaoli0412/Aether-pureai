@@ -357,9 +357,7 @@ fn parse_upstream_policy_fields(
     }
 }
 
-fn parse_empty_response_policy(
-    empty: &serde_json::Map<String, Value>,
-) -> LocalEmptyResponsePolicy {
+fn parse_empty_response_policy(empty: &serde_json::Map<String, Value>) -> LocalEmptyResponsePolicy {
     LocalEmptyResponsePolicy {
         detect: empty
             .get("detect")

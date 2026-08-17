@@ -60,8 +60,7 @@ pub(crate) use self::policy::{
     local_failover_policy_from_transport, resolve_local_failover_policy,
     responses_websocket_adapter, LocalEmptyResponseExhaustion, LocalEmptyResponsePolicy,
     LocalFailoverPolicy, LocalFailoverRegexRule, ResponsesWebSocketAdapter,
-    CYBER_CONTINUE_FAILOVER_CONFIG_KEY, RESPONSES_WEBSOCKET_CONFIG_KEY,
-    UPSTREAM_POLICY_CONFIG_KEY,
+    CYBER_CONTINUE_FAILOVER_CONFIG_KEY, RESPONSES_WEBSOCKET_CONFIG_KEY, UPSTREAM_POLICY_CONFIG_KEY,
 };
 pub(crate) use self::recovery::{
     analyze_local_failover, analyze_local_transport_error, apply_provider_failure_disposition,

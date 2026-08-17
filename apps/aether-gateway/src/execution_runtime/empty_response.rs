@@ -97,14 +97,12 @@ pub(crate) fn empty_success_action(
     policy: Option<&LocalEmptyResponsePolicy>,
     empty_attempts_before_this: u64,
 ) -> EmptySuccessAction {
-    let detect = provider_format_is_gemini_generate_content
-        || policy.is_some_and(|policy| policy.detect);
+    let detect =
+        provider_format_is_gemini_generate_content || policy.is_some_and(|policy| policy.detect);
     if !detect {
         return EmptySuccessAction::None;
     }
-    let budget = policy
-        .map(|policy| policy.max_attempts)
-        .unwrap_or(u64::MAX);
+    let budget = policy.map(|policy| policy.max_attempts).unwrap_or(u64::MAX);
     if empty_attempts_before_this < budget {
         return EmptySuccessAction::RewriteRetryable;
     }
@@ -136,8 +134,7 @@ pub(crate) fn prefetched_stream_body_lacks_visible_output(body: &[u8]) -> bool {
         }
         match serde_json::from_str::<serde_json::Value>(data) {
             Ok(event) => {
-                if crate::ai_serving::gemini_generate_content_response_has_visible_output(&event)
-                {
+                if crate::ai_serving::gemini_generate_content_response_has_visible_output(&event) {
                     return false;
                 }
             }
@@ -296,7 +293,9 @@ mod tests {
     #[test]
     fn prefetched_empty_sse_body_lacks_visible_output() {
         assert!(prefetched_stream_body_lacks_visible_output(b""));
-        assert!(prefetched_stream_body_lacks_visible_output(b"data: [DONE]\n\n"));
+        assert!(prefetched_stream_body_lacks_visible_output(
+            b"data: [DONE]\n\n"
+        ));
         assert!(prefetched_stream_body_lacks_visible_output(
             b"data: {\"choices\":[{\"delta\":{\"content\":\"\"}}]}\n\ndata: [DONE]\n\n"
         ));
@@ -314,9 +313,13 @@ mod tests {
             b"data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hi\"}]}}]}\n\n"
         ));
         // Non-JSON data frames count as content.
-        assert!(!prefetched_stream_body_lacks_visible_output(b"data: plain text\n\n"));
+        assert!(!prefetched_stream_body_lacks_visible_output(
+            b"data: plain text\n\n"
+        ));
         // Binary payloads are out of scope.
-        assert!(!prefetched_stream_body_lacks_visible_output(&[0xff, 0xfe, 0x00]));
+        assert!(!prefetched_stream_body_lacks_visible_output(&[
+            0xff, 0xfe, 0x00
+        ]));
     }
 
     #[test]
@@ -328,7 +331,9 @@ mod tests {
             b"{\"choices\":[{\"message\":{\"content\":\"hi\"}}]}"
         ));
         // Bodies without a chat container are never treated as empty.
-        assert!(!prefetched_stream_body_lacks_visible_output(b"{\"data\":[1,2,3]}"));
+        assert!(!prefetched_stream_body_lacks_visible_output(
+            b"{\"data\":[1,2,3]}"
+        ));
         // Embedded errors are not empty responses.
         assert!(!prefetched_stream_body_lacks_visible_output(
             b"{\"choices\":[],\"error\":{\"message\":\"boom\"}}"
