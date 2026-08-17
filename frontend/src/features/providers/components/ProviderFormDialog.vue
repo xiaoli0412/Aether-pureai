@@ -380,6 +380,110 @@
           />
         </div>
 
+        <div
+          class="space-y-3 p-3 border rounded-lg bg-muted/50"
+          data-testid="upstream-policy-setting"
+        >
+          <div class="space-y-0.5">
+            <span class="text-sm font-medium">{{ legacyT('上游策略') }}</span>
+            <p class="text-xs text-muted-foreground leading-relaxed">
+              {{ legacyT('控制该提供商上游响应的透传与重试行为：完全透传（不重试、不拦截）、限额重试后透传上游错误、风控回空处理。不配置时保持默认故障转移行为。') }}
+            </p>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div class="space-y-1.5">
+              <Label>{{ legacyT('策略模式') }}</Label>
+              <Select v-model="form.upstream_policy_mode">
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="default">
+                    {{ legacyT('默认') }}
+                  </SelectItem>
+                  <SelectItem value="full_passthrough">
+                    {{ legacyT('完全透传') }}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div class="space-y-1.5">
+              <Label>{{ legacyT('最大尝试次数') }}</Label>
+              <Input
+                :model-value="form.upstream_policy_max_attempts ?? ''"
+                type="number"
+                min="1"
+                max="100"
+                :placeholder="legacyT('不限制')"
+                @update:model-value="(v) => form.upstream_policy_max_attempts = parseNumberInput(v)"
+              />
+            </div>
+          </div>
+          <div class="flex items-center justify-between">
+            <div class="space-y-0.5">
+              <Label for="upstream-policy-passthrough-errors" class="text-xs">
+                {{ legacyT('透传上游错误') }}
+              </Label>
+              <p class="text-xs text-muted-foreground">
+                {{ legacyT('重试耗尽后把最后一次上游错误响应原样返回下游，而不是网关的 503。') }}
+              </p>
+            </div>
+            <Switch
+              id="upstream-policy-passthrough-errors"
+              :model-value="form.upstream_policy_passthrough_errors"
+              :aria-label="legacyT('透传上游错误')"
+              @update:model-value="(v: boolean) => form.upstream_policy_passthrough_errors = v"
+            />
+          </div>
+          <div class="space-y-2 border-t pt-2">
+            <div class="flex items-center justify-between">
+              <div class="space-y-0.5">
+                <Label for="upstream-policy-empty-detect" class="text-xs">
+                  {{ legacyT('回空检测（风控空响应）') }}
+                </Label>
+                <p class="text-xs text-muted-foreground">
+                  {{ legacyT('检测上游返回 HTTP 200 但无可见内容的情况（如 Gemini 风控回空），并按预算重试或透传。') }}
+                </p>
+              </div>
+              <Switch
+                id="upstream-policy-empty-detect"
+                :model-value="form.upstream_policy_empty_detect"
+                :aria-label="legacyT('回空检测')"
+                @update:model-value="(v: boolean) => form.upstream_policy_empty_detect = v"
+              />
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <div class="space-y-1.5">
+                <Label>{{ legacyT('回空重试次数') }}</Label>
+                <Input
+                  :model-value="form.upstream_policy_empty_max_attempts ?? ''"
+                  type="number"
+                  min="0"
+                  max="100"
+                  :placeholder="legacyT('默认 1')"
+                  @update:model-value="(v) => form.upstream_policy_empty_max_attempts = parseNumberInput(v)"
+                />
+              </div>
+              <div class="space-y-1.5">
+                <Label>{{ legacyT('预算耗尽行为') }}</Label>
+                <Select v-model="form.upstream_policy_empty_on_exhausted">
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="passthrough">
+                      {{ legacyT('透传空响应给下游') }}
+                    </SelectItem>
+                    <SelectItem value="error">
+                      {{ legacyT('按失败处理') }}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div class="flex items-center justify-between gap-4 p-3 border rounded-lg bg-muted/50">
           <div class="space-y-0.5">
             <span class="text-sm font-medium">{{ legacyT('敏感信息保护') }}</span>
@@ -506,6 +610,13 @@ const form = ref({
   kiro_simulated_cache_enabled: false,
   // Responses WebSocket 配置
   responses_websocket_enabled: false,
+  // 上游策略（透传/限额重试/回空处理）
+  upstream_policy_mode: 'default' as 'default' | 'full_passthrough',
+  upstream_policy_max_attempts: undefined as number | undefined,
+  upstream_policy_passthrough_errors: false,
+  upstream_policy_empty_detect: false,
+  upstream_policy_empty_max_attempts: undefined as number | undefined,
+  upstream_policy_empty_on_exhausted: 'error' as 'passthrough' | 'error',
 })
 
 // 重置表单
@@ -540,6 +651,13 @@ function resetForm() {
     kiro_simulated_cache_enabled: false,
     // Responses WebSocket 配置
     responses_websocket_enabled: false,
+    // 上游策略（透传/限额重试/回空处理）
+    upstream_policy_mode: 'default',
+    upstream_policy_max_attempts: undefined,
+    upstream_policy_passthrough_errors: false,
+    upstream_policy_empty_detect: false,
+    upstream_policy_empty_max_attempts: undefined,
+    upstream_policy_empty_on_exhausted: 'error',
   }
 }
 
@@ -578,6 +696,13 @@ function loadProviderData() {
     kiro_simulated_cache_enabled: props.provider.kiro_simulated_cache_enabled ?? false,
     // Responses WebSocket 配置
     responses_websocket_enabled: props.provider.responses_websocket_enabled ?? false,
+    // 上游策略（透传/限额重试/回空处理）
+    upstream_policy_mode: props.provider.upstream_policy?.mode ?? 'default',
+    upstream_policy_max_attempts: props.provider.upstream_policy?.max_attempts ?? undefined,
+    upstream_policy_passthrough_errors: props.provider.upstream_policy?.passthrough_upstream_errors ?? false,
+    upstream_policy_empty_detect: props.provider.upstream_policy?.empty_response?.detect ?? false,
+    upstream_policy_empty_max_attempts: props.provider.upstream_policy?.empty_response?.max_attempts ?? undefined,
+    upstream_policy_empty_on_exhausted: props.provider.upstream_policy?.empty_response?.on_exhausted ?? 'error',
   }
 }
 
@@ -603,6 +728,38 @@ watch(() => form.value.provider_type, () => {
     form.value.codex_fingerprint_convergence_enabled = false
   }
 })
+
+// 组装上游策略载荷：全部为默认值时提交 null（清除配置）
+function buildUpstreamPolicyPayload() {
+  const mode = form.value.upstream_policy_mode
+  const emptyDetect = form.value.upstream_policy_empty_detect
+  const isDefault =
+    mode === 'default' &&
+    form.value.upstream_policy_max_attempts === undefined &&
+    !form.value.upstream_policy_passthrough_errors &&
+    !emptyDetect
+  if (isDefault) {
+    return null
+  }
+  const policy: Record<string, unknown> = {}
+  if (mode !== 'default') {
+    policy.mode = mode
+  }
+  if (form.value.upstream_policy_max_attempts !== undefined) {
+    policy.max_attempts = form.value.upstream_policy_max_attempts
+  }
+  if (form.value.upstream_policy_passthrough_errors) {
+    policy.passthrough_upstream_errors = true
+  }
+  if (emptyDetect) {
+    policy.empty_response = {
+      detect: true,
+      max_attempts: form.value.upstream_policy_empty_max_attempts ?? 1,
+      on_exhausted: form.value.upstream_policy_empty_on_exhausted,
+    }
+  }
+  return policy
+}
 
 // 提交表单
 const handleSubmit = async () => {
@@ -638,6 +795,7 @@ const handleSubmit = async () => {
       quota_expires_at: quotaExpiresAt,
       keep_priority_on_conversion: form.value.keep_priority_on_conversion,
       responses_websocket_enabled: form.value.responses_websocket_enabled,
+      upstream_policy: buildUpstreamPolicyPayload(),
       is_active: form.value.is_active,
       // 请求配置
       max_retries: form.value.max_retries ?? undefined,

@@ -189,10 +189,24 @@ export interface ResponsesWebSocketProviderConfig {
   enabled: boolean
 }
 
+export interface UpstreamPolicyEmptyResponseConfig {
+  detect?: boolean
+  max_attempts?: number
+  on_exhausted?: 'passthrough' | 'error'
+}
+
+export interface UpstreamPolicyConfig {
+  mode?: 'default' | 'full_passthrough'
+  max_attempts?: number
+  passthrough_upstream_errors?: boolean
+  empty_response?: UpstreamPolicyEmptyResponseConfig
+}
+
 export interface ProviderConfig {
   chat_pii_redaction?: ChatPiiRedactionProviderConfig
   codex?: CodexProviderConfig
   responses_websocket?: ResponsesWebSocketProviderConfig
+  upstream_policy?: UpstreamPolicyConfig
   pool_advanced?: PoolAdvancedConfig
   failover_rules?: FailoverRulesConfig
   claude_code_advanced?: ClaudeCodeAdvancedConfig
@@ -919,6 +933,7 @@ export interface ProviderWithEndpointsSummary {
   codex_fingerprint_convergence_enabled?: boolean
   kiro_simulated_cache_enabled?: boolean
   responses_websocket_enabled?: boolean
+  upstream_policy?: UpstreamPolicyConfig | null
   ops_quota_alert_enabled?: boolean
   created_at: string
   updated_at: string
