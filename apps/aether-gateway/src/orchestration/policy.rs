@@ -536,6 +536,14 @@ fn cost_tier_to_value(policy: &CostTierPolicy) -> Option<Value> {
     }))
 }
 
+/// Parses the provider-level `config.cost_tier` into a [`CostTierPolicy`].
+/// Returns a default (inactive) policy when the provider carries no cost-tier
+/// configuration, so callers can treat "absent" and "inactive" uniformly. This
+/// is the planner's entry point into the detachable cost-tier routing module.
+pub(crate) fn cost_tier_policy_from_provider_config(config: Option<&Value>) -> CostTierPolicy {
+    parse_cost_tier_fields(config.and_then(Value::as_object))
+}
+
 fn upstream_policy_to_value(policy: &LocalFailoverPolicy) -> Value {
     let mut object = serde_json::Map::new();
     if policy.upstream_passthrough_mode {
@@ -709,11 +717,12 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        append_local_failover_policy_to_value, local_failover_policy_from_report_context,
-        local_failover_policy_from_transport, responses_websocket_adapter,
-        responses_websocket_enabled, CostTierBillingPreference, CostTierPolicy, CostTierStickiness,
-        LocalEmptyResponseExhaustion, LocalEmptyResponsePolicy, LocalFailoverPolicy,
-        LocalFailoverRegexRule, ResponsesWebSocketAdapter,
+        append_local_failover_policy_to_value, cost_tier_policy_from_provider_config,
+        local_failover_policy_from_report_context, local_failover_policy_from_transport,
+        responses_websocket_adapter, responses_websocket_enabled, CostTierBillingPreference,
+        CostTierPolicy, CostTierStickiness, LocalEmptyResponseExhaustion,
+        LocalEmptyResponsePolicy, LocalFailoverPolicy, LocalFailoverRegexRule,
+        ResponsesWebSocketAdapter,
     };
     use crate::provider_transport::snapshot::{
         GatewayProviderTransportEndpoint, GatewayProviderTransportKey,
@@ -1214,6 +1223,35 @@ mod tests {
         );
         // Stickiness defaults when the block is absent.
         assert_eq!(policy.cost_tier.stickiness, CostTierStickiness::default());
+    }
+
+    #[test]
+    fn cost_tier_policy_from_provider_config_handles_absent_and_active() {
+        assert_eq!(
+            cost_tier_policy_from_provider_config(None),
+            CostTierPolicy::default()
+        );
+        assert_eq!(
+            cost_tier_policy_from_provider_config(Some(&json!({}))),
+            CostTierPolicy::default()
+        );
+        let policy = cost_tier_policy_from_provider_config(Some(&json!({
+            "cost_tier": {
+                "enabled": true,
+                "context_threshold_tokens": 8000,
+                "tiers": {
+                    "below": { "prefer": "per_use" },
+                    "above": { "prefer": "per_request" }
+                }
+            }
+        })));
+        assert!(policy.is_active());
+        assert_eq!(policy.context_threshold_tokens, Some(8000));
+        assert_eq!(policy.below_preference, Some(CostTierBillingPreference::PerUse));
+        assert_eq!(
+            policy.above_preference,
+            Some(CostTierBillingPreference::PerRequest)
+        );
     }
 
     #[test]

@@ -356,6 +356,7 @@ impl AppState {
             auth_daily_quota_availability_cache: Arc::new(ValueCache::default()),
             auth_wallet_snapshot_cache: Arc::new(ValueCache::default()),
             auth_request_cost_upper_bound_cache: Arc::new(ValueCache::default()),
+            cost_tier_billing_context_cache: Arc::new(ValueCache::default()),
             provider_quota_snapshot_cache: Arc::new(ValueCache::default()),
             user_groups_for_user_cache: Arc::new(ValueCache::default()),
             routing_group_selection_cache: Arc::new(ValueCache::default()),
@@ -910,6 +911,7 @@ impl AppState {
         self.data.clear_provider_catalog_cache();
         self.endpoint_response_header_rules_cache.clear();
         self.auth_request_cost_upper_bound_cache.clear();
+        self.cost_tier_billing_context_cache.clear();
         self.routing_group_selection_cache.clear();
         self.candidate_row_page_cache.clear();
         self.candidate_page_cache.clear();
@@ -955,6 +957,7 @@ impl AppState {
         self.auth_daily_quota_availability_cache.clear();
         self.auth_wallet_snapshot_cache.clear();
         self.auth_request_cost_upper_bound_cache.clear();
+        self.cost_tier_billing_context_cache.clear();
         self.provider_quota_snapshot_cache.clear();
         self.user_groups_for_user_cache.clear();
         self.routing_group_selection_cache.clear();

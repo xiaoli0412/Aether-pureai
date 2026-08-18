@@ -400,6 +400,8 @@ pub struct AppState {
     pub(crate) auth_wallet_snapshot_cache:
         Arc<ValueCache<String, aether_data::repository::wallet::StoredWalletSnapshot>>,
     pub(crate) auth_request_cost_upper_bound_cache: Arc<ValueCache<String, f64>>,
+    pub(crate) cost_tier_billing_context_cache:
+        Arc<ValueCache<String, aether_data_contracts::repository::billing::StoredBillingModelContext>>,
     pub(crate) provider_quota_snapshot_cache: Arc<ValueCache<String, StoredProviderQuotaSnapshot>>,
     pub(crate) user_groups_for_user_cache: Arc<ValueCache<String, Vec<StoredUserGroup>>>,
     pub(crate) routing_group_selection_cache:
