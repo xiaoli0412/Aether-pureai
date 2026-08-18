@@ -4,6 +4,7 @@ import {
   Activity,
   BarChart3,
   Box,
+  Bug,
   Cog,
   CreditCard,
   Database,
@@ -136,6 +137,7 @@ export function buildNavigation(options: {
         ...activeModuleItems(modules, 'management'),
         { name: t('nav.asyncTasks'), href: '/admin/async-tasks', icon: Zap },
         { name: t('nav.usageRecords'), href: '/admin/usage', icon: BarChart3 },
+        { name: t('nav.errorDiagnostics'), href: '/admin/diagnostics', icon: Bug },
       ]
     },
     {

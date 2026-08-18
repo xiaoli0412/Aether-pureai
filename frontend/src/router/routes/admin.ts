@@ -189,6 +189,11 @@ export const adminRoutes: RouteRecordRaw[] = [
         component: view(() => import('@/views/admin/AuditLogs.vue'))
       },
       {
+        path: 'diagnostics',
+        name: 'ErrorDiagnostics',
+        component: view(() => import('@/views/admin/ErrorDiagnostics.vue'))
+      },
+      {
         path: 'cache-monitoring',
         name: 'CacheMonitoring',
         component: view(() => import('@/views/admin/CacheMonitoring.vue'))
