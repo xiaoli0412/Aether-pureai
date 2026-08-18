@@ -3278,6 +3278,22 @@ struct EstimatedRequestUsage {
     cache_creation_ephemeral_1h_tokens: u64,
 }
 
+/// Estimates the total upstream input context (in tokens) a request body will
+/// consume: the estimated input tokens plus any explicitly declared cache-read
+/// and cache-creation tokens. This mirrors billing's total-input-context view
+/// (`normalize_total_input_context_for_cache_hit_rate`) and is reused by the
+/// cost-tier routing layer to decide which billing tier a request belongs to.
+///
+/// Returns `0` when the body yields no estimable context.
+pub fn estimate_request_context_tokens(value: &Value) -> u64 {
+    estimate_request_usage(value).map_or(0, |usage| {
+        usage
+            .input_tokens
+            .saturating_add(usage.cache_read_tokens)
+            .saturating_add(usage.cache_creation_tokens)
+    })
+}
+
 fn estimate_request_usage(value: &Value) -> Option<EstimatedRequestUsage> {
     let preferred_total = match value {
         Value::Object(object) => [
@@ -3478,8 +3494,9 @@ mod tests {
         build_sync_terminal_usage_event, build_sync_terminal_usage_payload_seed,
         build_sync_terminal_usage_seed, build_terminal_usage_context_seed,
         build_terminal_usage_event_from_seed, build_usage_event_data_seed, decode_body_for_storage,
-        extract_token_counts_from_json, extract_token_counts_from_value, headers_to_json,
-        mask_header_value, mask_sensitive_body_fields, mask_sensitive_headers_in_json_value,
+        estimate_request_context_tokens, extract_token_counts_from_json,
+        extract_token_counts_from_value, headers_to_json, mask_header_value,
+        mask_sensitive_body_fields, mask_sensitive_headers_in_json_value,
         parse_sse_body_for_storage, resolve_error_message, trim_owned_non_empty_string,
         LifecycleUsageSeed, TerminalUsageSeed, UsageBodyRefsSeed, UsageBodyStatesSeed,
         UsageRoutingSeed, UsageTerminalState, MAX_USAGE_CAPTURE_BYTES, MAX_USAGE_CAPTURE_DEPTH,
@@ -3508,6 +3525,37 @@ mod tests {
         .expect("tokens should exist");
 
         assert_eq!(tokens, (3, 5, 8));
+    }
+
+    #[test]
+    fn estimates_request_context_tokens_from_messages_body() {
+        let short = estimate_request_context_tokens(&json!({
+            "messages": [{ "role": "user", "content": "hi" }],
+        }));
+        let long = estimate_request_context_tokens(&json!({
+            "messages": [{ "role": "user", "content": "x".repeat(4_000) }],
+        }));
+        assert!(short > 0, "short body should estimate to >0");
+        assert!(long > short, "longer body should estimate larger");
+    }
+
+    #[test]
+    fn estimates_request_context_tokens_include_explicit_cache_tokens() {
+        let without_cache = estimate_request_context_tokens(&json!({
+            "messages": [{ "role": "user", "content": "hello" }],
+        }));
+        let with_cache = estimate_request_context_tokens(&json!({
+            "messages": [{ "role": "user", "content": "hello" }],
+            "cache_read_input_tokens": 1_000,
+            "cache_creation_input_tokens": 250,
+        }));
+        assert_eq!(with_cache, without_cache + 1_250);
+    }
+
+    #[test]
+    fn estimates_request_context_tokens_zero_for_empty_body() {
+        assert_eq!(estimate_request_context_tokens(&json!({})), 0);
+        assert_eq!(estimate_request_context_tokens(&Value::Null), 0);
     }
 
     #[test]

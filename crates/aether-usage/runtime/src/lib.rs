@@ -61,7 +61,8 @@ pub use write::{
     build_sync_terminal_usage_event, build_sync_terminal_usage_outcome,
     build_sync_terminal_usage_payload_seed, build_sync_terminal_usage_seed,
     build_terminal_usage_context_seed, build_terminal_usage_event_from_outcome,
-    build_terminal_usage_event_from_seed, build_usage_event_data_seed, LifecycleUsageSeed,
-    StreamTerminalUsagePayloadSeed, SyncTerminalUsagePayloadSeed, TerminalUsageContextSeed,
-    TerminalUsageOutcome, TerminalUsageSeed, UsageTerminalState,
+    build_terminal_usage_event_from_seed, build_usage_event_data_seed,
+    estimate_request_context_tokens, LifecycleUsageSeed, StreamTerminalUsagePayloadSeed,
+    SyncTerminalUsagePayloadSeed, TerminalUsageContextSeed, TerminalUsageOutcome,
+    TerminalUsageSeed, UsageTerminalState,
 };
