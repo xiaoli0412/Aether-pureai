@@ -26,7 +26,6 @@ impl AppState {
     ) -> LocalMutationOutcome<T> {
         if matches!(&outcome, LocalMutationOutcome::Applied(_)) {
             self.auth_request_cost_upper_bound_cache.clear();
-            self.cost_tier_billing_context_cache.clear();
         }
         outcome
     }
