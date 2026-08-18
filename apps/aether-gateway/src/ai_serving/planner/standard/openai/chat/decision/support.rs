@@ -15,6 +15,7 @@ use crate::ai_serving::planner::candidate_metadata::{
 };
 use crate::ai_serving::planner::candidate_resolution::SkippedLocalExecutionCandidate;
 use crate::ai_serving::planner::candidate_source::LocalCandidatePreselectionKeyMode;
+use crate::ai_serving::planner::cost_tier_routing;
 use crate::ai_serving::planner::materialization_policy::{
     build_local_candidate_persistence_policy, LocalCandidatePersistencePolicyKind,
 };
@@ -126,6 +127,7 @@ pub(crate) async fn materialize_local_openai_chat_candidate_attempts(
 ) -> Vec<LocalOpenAiChatCandidateAttempt> {
     let planner_state = PlannerAppState::new(state);
     let sticky_session_token = extract_pool_sticky_session_token(body_json);
+    let estimated_context_tokens = cost_tier_routing::estimate_request_context_tokens(body_json);
     let auth_context: &ExecutionRuntimeAuthContext = &input.auth_context;
     let persistence_policy = build_local_candidate_persistence_policy(
         auth_context,
@@ -142,6 +144,7 @@ pub(crate) async fn materialize_local_openai_chat_candidate_attempts(
         input.required_capabilities.as_ref(),
         input.routing_policy.as_ref(),
         sticky_session_token.as_deref(),
+        estimated_context_tokens,
         input.request_auth_channel.as_deref(),
         persistence_policy,
         candidates,
@@ -207,6 +210,7 @@ pub(crate) async fn build_local_openai_chat_candidate_attempt_source<'a>(
 ) -> (LocalOpenAiChatCandidateAttemptSource<'a>, usize) {
     let planner_state = PlannerAppState::new(state);
     let sticky_session_token = extract_pool_sticky_session_token(body_json);
+    let estimated_context_tokens = cost_tier_routing::estimate_request_context_tokens(body_json);
     let auth_context: &ExecutionRuntimeAuthContext = &input.auth_context;
     let persistence_policy = build_local_candidate_persistence_policy(
         auth_context,
@@ -223,6 +227,7 @@ pub(crate) async fn build_local_openai_chat_candidate_attempt_source<'a>(
         input.required_capabilities.as_ref(),
         input.routing_policy.as_ref(),
         sticky_session_token.as_deref(),
+        estimated_context_tokens,
         input.request_auth_channel.as_deref(),
         persistence_policy,
         candidates,
@@ -285,6 +290,7 @@ pub(crate) async fn build_lazy_local_openai_chat_candidate_attempt_source<'a>(
 ) -> (LocalOpenAiChatCandidateAttemptSource<'a>, usize) {
     let planner_state = PlannerAppState::new(state);
     let sticky_session_token = extract_pool_sticky_session_token(body_json);
+    let estimated_context_tokens = cost_tier_routing::estimate_request_context_tokens(body_json);
     let auth_context: &ExecutionRuntimeAuthContext = &input.auth_context;
     let persistence_policy = build_local_candidate_persistence_policy(
         auth_context,
@@ -304,6 +310,7 @@ pub(crate) async fn build_lazy_local_openai_chat_candidate_attempt_source<'a>(
         input.required_capabilities.as_ref(),
         input.routing_policy.as_ref(),
         sticky_session_token.as_deref(),
+        estimated_context_tokens,
         input.request_auth_channel.as_deref(),
         persistence_policy,
         false,

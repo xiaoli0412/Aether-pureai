@@ -33,6 +33,7 @@ use crate::ai_serving::planner::candidate_resolution::{
 use crate::ai_serving::planner::candidate_source::{
     LocalCandidatePreselectionKeyMode, LocalCandidatePreselectionPageCursor,
 };
+use crate::ai_serving::planner::cost_tier_routing;
 use crate::ai_serving::planner::materialization_policy::LocalCandidatePersistencePolicy;
 use crate::ai_serving::planner::pool_scheduler::PoolKeyCursor;
 use crate::ai_serving::planner::runtime_miss::record_local_runtime_candidate_skip_reason;
@@ -345,6 +346,7 @@ struct GatewayLocalCandidateMaterializationPort<'a, F, G> {
     required_capabilities: Option<&'a Value>,
     routing_policy: Option<&'a ResolvedRoutingPolicy>,
     sticky_session_token: Option<&'a str>,
+    estimated_context_tokens: Option<u64>,
     request_auth_channel: Option<&'a str>,
     persistence_policy: LocalCandidatePersistencePolicy<'a>,
     resolution_mode: LocalCandidateResolutionMode,
@@ -390,7 +392,7 @@ where
         &self,
         candidates: Vec<Self::Candidate>,
     ) -> Result<(Vec<Self::Eligible>, Vec<Self::Skipped>), Self::Error> {
-        let resolved = resolve_and_rank_logical_local_execution_candidates(
+        let (eligible, skipped) = resolve_and_rank_logical_local_execution_candidates(
             self.state,
             candidates,
             self.client_api_format,
@@ -404,7 +406,19 @@ where
             self.resolution_mode,
         )
         .await;
-        Ok(resolved)
+        // Cost-tier re-ranking runs after resolution/ranking (and after any
+        // resolved-page cache read inside it), keeping cached pages canonical.
+        let eligible = cost_tier_routing::apply_cost_tier_reranking(
+            self.state,
+            eligible,
+            &cost_tier_routing::CostTierRoutingRequest {
+                estimated_context_tokens: self.estimated_context_tokens,
+                sticky_session_token: self.sticky_session_token,
+            },
+            self.client_api_format,
+        )
+        .await;
+        Ok((eligible, skipped))
     }
 
     fn decorate_skipped_candidate(&self, skipped: Self::Skipped) -> Self::Skipped {
@@ -599,6 +613,7 @@ pub(crate) async fn materialize_local_execution_candidates_with_serving<F, G>(
     required_capabilities: Option<&Value>,
     routing_policy: Option<&ResolvedRoutingPolicy>,
     sticky_session_token: Option<&str>,
+    estimated_context_tokens: Option<u64>,
     request_auth_channel: Option<&str>,
     persistence_policy: LocalCandidatePersistencePolicy<'_>,
     candidates: Vec<SchedulerMinimalCandidateSelectionCandidate>,
@@ -623,6 +638,7 @@ where
         required_capabilities,
         routing_policy,
         sticky_session_token,
+        estimated_context_tokens,
         request_auth_channel,
         persistence_policy,
         resolution_mode,
@@ -648,6 +664,7 @@ pub(crate) async fn build_local_execution_candidate_attempt_source_with_serving<
     required_capabilities: Option<&Value>,
     routing_policy: Option<&ResolvedRoutingPolicy>,
     sticky_session_token: Option<&str>,
+    estimated_context_tokens: Option<u64>,
     request_auth_channel: Option<&str>,
     persistence_policy: LocalCandidatePersistencePolicy<'_>,
     candidates: Vec<SchedulerMinimalCandidateSelectionCandidate>,
@@ -675,6 +692,18 @@ where
         sticky_session_token,
         request_auth_channel,
         resolution_mode,
+    )
+    .await;
+    // Cost-tier re-ranking runs after resolution/ranking and before affinity
+    // is remembered, so the remembered session affinity follows the winner.
+    let candidates = cost_tier_routing::apply_cost_tier_reranking(
+        state,
+        candidates,
+        &cost_tier_routing::CostTierRoutingRequest {
+            estimated_context_tokens,
+            sticky_session_token,
+        },
+        client_api_format,
     )
     .await;
     let skipped_candidate_count = preselection_skipped.len() + resolved_skipped.len();
@@ -813,6 +842,7 @@ pub(crate) async fn build_lazy_requested_model_execution_candidate_attempt_sourc
     required_capabilities: Option<&Value>,
     routing_policy: Option<&ResolvedRoutingPolicy>,
     sticky_session_token: Option<&str>,
+    estimated_context_tokens: Option<u64>,
     request_auth_channel: Option<&str>,
     persistence_policy: LocalCandidatePersistencePolicy<'_>,
     use_api_format_alias_match: bool,
@@ -858,6 +888,7 @@ where
         required_capabilities: required_capabilities.cloned(),
         routing_policy: routing_policy.cloned(),
         sticky_session_token: sticky_session_token.map(str::to_string),
+        estimated_context_tokens,
         request_auth_channel: request_auth_channel.map(str::to_string),
         skipped_user_id: persistence_policy.skipped.user_id.to_string(),
         skipped_api_key_id: persistence_policy.skipped.api_key_id.to_string(),
@@ -911,6 +942,7 @@ struct RequestedModelAttemptPageCursor<'a> {
     required_capabilities: Option<Value>,
     routing_policy: Option<ResolvedRoutingPolicy>,
     sticky_session_token: Option<String>,
+    estimated_context_tokens: Option<u64>,
     request_auth_channel: Option<String>,
     skipped_user_id: String,
     skipped_api_key_id: String,
@@ -1009,6 +1041,19 @@ impl<'a> RequestedModelAttemptPageCursor<'a> {
                 "candidate_page_resolve",
                 resolve_started_at.elapsed().as_millis() as u64,
             );
+            // Cost-tier re-ranking runs after the resolved-page cache read so
+            // cached pages keep the canonical base ordering; the pass is
+            // page-local in the lazy path.
+            let candidates = cost_tier_routing::apply_cost_tier_reranking(
+                self.state,
+                candidates,
+                &cost_tier_routing::CostTierRoutingRequest {
+                    estimated_context_tokens: self.estimated_context_tokens,
+                    sticky_session_token: self.sticky_session_token.as_deref(),
+                },
+                &self.client_api_format,
+            )
+            .await;
             let skipped_candidates = page
                 .skipped_candidates
                 .into_iter()
@@ -2383,6 +2428,7 @@ mod tests {
             required_capabilities: None,
             routing_policy: None,
             sticky_session_token: None,
+            estimated_context_tokens: None,
             request_auth_channel: None,
             persistence_policy: LocalCandidatePersistencePolicy {
                 available: LocalAvailableCandidatePersistenceContext {
@@ -2454,6 +2500,7 @@ mod tests {
             required_capabilities: None,
             routing_policy: None,
             sticky_session_token: None,
+            estimated_context_tokens: None,
             request_auth_channel: None,
             skipped_user_id: "user-1".to_string(),
             skipped_api_key_id: "api-key-1".to_string(),
@@ -2551,6 +2598,7 @@ mod tests {
             required_capabilities: None,
             routing_policy: None,
             sticky_session_token: None,
+            estimated_context_tokens: None,
             request_auth_channel: None,
             skipped_user_id: "user-1".to_string(),
             skipped_api_key_id: "api-key-1".to_string(),

@@ -12,6 +12,7 @@ use crate::ai_serving::planner::candidate_metadata::{
 };
 use crate::ai_serving::planner::candidate_resolution::SkippedLocalExecutionCandidate;
 use crate::ai_serving::planner::common::extract_requested_model_from_request;
+use crate::ai_serving::planner::cost_tier_routing;
 use crate::ai_serving::planner::decision_input::{
     attach_routing_policy_to_local_requested_model_input,
     build_local_requested_model_decision_input, resolve_local_authenticated_decision_input,
@@ -118,6 +119,7 @@ pub(crate) async fn materialize_local_same_format_provider_candidate_attempts(
     let spec_metadata = local_same_format_provider_spec_metadata(spec);
     let planner_state = PlannerAppState::new(state);
     let sticky_session_token = extract_pool_sticky_session_token(body_json);
+    let estimated_context_tokens = cost_tier_routing::estimate_request_context_tokens(body_json);
     let persistence_policy = build_local_candidate_persistence_policy(
         &input.auth_context,
         input.required_capabilities.as_ref(),
@@ -152,6 +154,7 @@ pub(crate) async fn materialize_local_same_format_provider_candidate_attempts(
         input.required_capabilities.as_ref(),
         input.routing_policy.as_ref(),
         sticky_session_token.as_deref(),
+        estimated_context_tokens,
         input.request_auth_channel.as_deref(),
         persistence_policy,
         candidates,
@@ -224,6 +227,7 @@ pub(crate) async fn build_local_same_format_provider_candidate_attempt_source<'a
     let spec_metadata = local_same_format_provider_spec_metadata(spec);
     let planner_state = PlannerAppState::new(state);
     let sticky_session_token = extract_pool_sticky_session_token(body_json);
+    let estimated_context_tokens = cost_tier_routing::estimate_request_context_tokens(body_json);
     let persistence_policy = build_local_candidate_persistence_policy(
         &input.auth_context,
         input.required_capabilities.as_ref(),
@@ -259,6 +263,7 @@ pub(crate) async fn build_local_same_format_provider_candidate_attempt_source<'a
         input.required_capabilities.as_ref(),
         input.routing_policy.as_ref(),
         sticky_session_token.as_deref(),
+        estimated_context_tokens,
         input.request_auth_channel.as_deref(),
         persistence_policy,
         candidates,

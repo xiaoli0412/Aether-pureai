@@ -720,9 +720,8 @@ mod tests {
         append_local_failover_policy_to_value, cost_tier_policy_from_provider_config,
         local_failover_policy_from_report_context, local_failover_policy_from_transport,
         responses_websocket_adapter, responses_websocket_enabled, CostTierBillingPreference,
-        CostTierPolicy, CostTierStickiness, LocalEmptyResponseExhaustion,
-        LocalEmptyResponsePolicy, LocalFailoverPolicy, LocalFailoverRegexRule,
-        ResponsesWebSocketAdapter,
+        CostTierPolicy, CostTierStickiness, LocalEmptyResponseExhaustion, LocalEmptyResponsePolicy,
+        LocalFailoverPolicy, LocalFailoverRegexRule, ResponsesWebSocketAdapter,
     };
     use crate::provider_transport::snapshot::{
         GatewayProviderTransportEndpoint, GatewayProviderTransportKey,
@@ -1247,7 +1246,10 @@ mod tests {
         })));
         assert!(policy.is_active());
         assert_eq!(policy.context_threshold_tokens, Some(8000));
-        assert_eq!(policy.below_preference, Some(CostTierBillingPreference::PerUse));
+        assert_eq!(
+            policy.below_preference,
+            Some(CostTierBillingPreference::PerUse)
+        );
         assert_eq!(
             policy.above_preference,
             Some(CostTierBillingPreference::PerRequest)

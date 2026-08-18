@@ -11,6 +11,7 @@ mod candidate_resolution;
 mod candidate_source;
 mod candidate_transport_ranking_facts;
 mod common;
+mod cost_tier_routing;
 mod decision;
 mod decision_input;
 mod gemini_cli;
