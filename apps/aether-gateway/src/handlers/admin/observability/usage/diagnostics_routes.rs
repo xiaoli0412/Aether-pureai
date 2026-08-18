@@ -1,3 +1,8 @@
+use super::diagnostics_summarizer::{
+    build_diagnostics_summary_prompt, cached_diagnostics_summary, call_diagnostics_summarizer,
+    diagnostics_summarizer_client, diagnostics_summary_now_unix_secs, merge_diagnostics_summary,
+    parse_diagnostics_summarizer_config, ERROR_DIAGNOSTIC_SUMMARIZER_CONFIG_KEY,
+};
 use super::replay::{
     admin_usage_resolve_body_value, admin_usage_resolve_request_capture_body_for_item,
 };
@@ -195,16 +200,116 @@ pub(super) async fn maybe_build_local_admin_diagnostics_response(
             else {
                 return Ok(Some(admin_usage_bad_request_response("request_id 无效")));
             };
-            return Ok(Some(
-                (
-                    http::StatusCode::NOT_IMPLEMENTED,
-                    Json(json!({
-                        "detail": "diagnostics summarize is not implemented yet",
-                        "request_id": request_id,
-                    })),
-                )
-                    .into_response(),
-            ));
+
+            // The AI summarizer is a detachable module: when the system config
+            // entry is absent or incomplete the feature is considered
+            // uninstalled and the endpoint reports 503 instead of calling an
+            // LLM.
+            let config_value = state
+                .read_system_config_json_value(ERROR_DIAGNOSTIC_SUMMARIZER_CONFIG_KEY)
+                .await?;
+            let Some(config) = parse_diagnostics_summarizer_config(config_value.as_ref()) else {
+                return Ok(Some(
+                    (
+                        http::StatusCode::SERVICE_UNAVAILABLE,
+                        Json(json!({
+                            "detail": "AI 摘要器未配置：请先设置系统配置 error_diagnostic_summarizer（base_url / api_key / model）",
+                            "request_id": request_id,
+                        })),
+                    )
+                        .into_response(),
+                ));
+            };
+
+            if !state.has_usage_data_reader() {
+                return Ok(Some(admin_usage_data_unavailable_response(
+                    ADMIN_USAGE_DATA_UNAVAILABLE_DETAIL,
+                )));
+            }
+
+            let Some(item) = state.find_request_usage_by_request_id(&request_id).await? else {
+                return Ok(Some(
+                    (
+                        http::StatusCode::NOT_FOUND,
+                        Json(json!({ "detail": "Diagnostic event not found" })),
+                    )
+                        .into_response(),
+                ));
+            };
+
+            let now = diagnostics_summary_now_unix_secs();
+            let refresh = query_param_bool(
+                request_context.request_query_string.as_deref(),
+                "refresh",
+                false,
+            );
+
+            if !refresh {
+                if let Some((summary, summarized_at)) =
+                    cached_diagnostics_summary(item.request_metadata.as_ref(), now)
+                {
+                    return Ok(Some(attach_admin_audit_response(
+                        Json(json!({
+                            "request_id": request_id,
+                            "summary": summary,
+                            "cached": true,
+                            "persisted": true,
+                            "summarized_at_unix_secs": summarized_at,
+                        }))
+                        .into_response(),
+                        "admin_diagnostics_summary_generated",
+                        "summarize_diagnostics",
+                        "usage_record",
+                        &item.id,
+                    )));
+                }
+            }
+
+            let response_body = admin_usage_resolve_body_value(
+                state,
+                &item,
+                item.response_body.as_ref(),
+                UsageBodyField::ResponseBody,
+            )
+            .await?;
+            let prompt = build_diagnostics_summary_prompt(&item, response_body.as_ref());
+            let client = diagnostics_summarizer_client(&config)?;
+            let summary = match call_diagnostics_summarizer(&client, &config, &prompt).await {
+                Ok(summary) => summary,
+                Err(err) => {
+                    return Ok(Some(
+                        (
+                            http::StatusCode::BAD_GATEWAY,
+                            Json(json!({
+                                "detail": format!("AI 摘要生成失败：{}", err.into_message()),
+                                "request_id": request_id,
+                            })),
+                        )
+                            .into_response(),
+                    ));
+                }
+            };
+
+            let merged_metadata =
+                merge_diagnostics_summary(item.request_metadata.clone(), &summary, now);
+            let persisted = state
+                .update_usage_request_metadata(&request_id, merged_metadata)
+                .await?;
+
+            return Ok(Some(attach_admin_audit_response(
+                Json(json!({
+                    "request_id": request_id,
+                    "summary": summary,
+                    "cached": false,
+                    "persisted": persisted,
+                    "summarized_at_unix_secs": now,
+                }))
+                .into_response(),
+                "admin_diagnostics_summary_generated",
+                "summarize_diagnostics",
+                "usage_record",
+                &item.id,
+            )));
         }
         _ => {}
     }

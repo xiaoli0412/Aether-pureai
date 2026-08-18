@@ -1367,6 +1367,21 @@ impl GatewayDataState {
         }
     }
 
+    pub(crate) async fn update_usage_request_metadata(
+        &self,
+        request_id: &str,
+        request_metadata: serde_json::Value,
+    ) -> Result<bool, DataLayerError> {
+        match &self.usage_writer {
+            Some(repository) => {
+                repository
+                    .update_request_metadata(request_id, request_metadata)
+                    .await
+            }
+            None => Ok(false),
+        }
+    }
+
     pub(crate) async fn find_request_usage_by_request_id_shallow(
         &self,
         request_id: &str,

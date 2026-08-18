@@ -6,6 +6,7 @@ mod analytics;
 mod analytics_routes;
 mod detail_routes;
 mod diagnostics_routes;
+mod diagnostics_summarizer;
 mod replay;
 mod summary_routes;
 

@@ -229,6 +229,18 @@ impl<'a> AdminAppState<'a> {
             .map_err(|err| GatewayError::Internal(err.to_string()))
     }
 
+    pub(crate) async fn update_usage_request_metadata(
+        &self,
+        request_id: &str,
+        request_metadata: serde_json::Value,
+    ) -> Result<bool, GatewayError> {
+        self.app
+            .data
+            .update_usage_request_metadata(request_id, request_metadata)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
     pub(crate) async fn list_request_usage_by_ids(
         &self,
         usage_ids: &[String],
