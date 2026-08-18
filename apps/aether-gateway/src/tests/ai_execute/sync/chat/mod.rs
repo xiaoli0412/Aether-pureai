@@ -70,6 +70,7 @@ use aether_data_contracts::repository::provider_catalog::{
 };
 use sha2::{Digest, Sha256};
 
+mod cost_tier;
 mod failover;
 mod local_decision;
 mod pii_redaction;

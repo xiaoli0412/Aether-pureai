@@ -1181,6 +1181,7 @@ fn ai_serving_planner_separates_local_candidate_resolution_from_ranking() {
         "mod candidate_resolution;",
         "mod candidate_preparation;",
         "mod candidate_transport_ranking_facts;",
+        "mod cost_tier_routing;",
         "mod pool_scheduler;",
     ] {
         assert!(
@@ -1188,6 +1189,41 @@ fn ai_serving_planner_separates_local_candidate_resolution_from_ranking() {
             "planner/mod.rs should wire {pattern}"
         );
     }
+
+    let cost_tier_routing =
+        read_workspace_file("apps/aether-gateway/src/ai_serving/planner/cost_tier_routing.rs");
+    for pattern in [
+        "pub(crate) async fn apply_cost_tier_reranking(",
+        "fn rerank_candidates(",
+    ] {
+        assert!(
+            cost_tier_routing.contains(pattern),
+            "planner/cost_tier_routing.rs should own {pattern}"
+        );
+    }
+    for forbidden in [
+        "apply_scheduler_candidate_ranking",
+        "resolve_and_rank_local_execution_candidates",
+    ] {
+        assert!(
+            !cost_tier_routing.contains(forbidden),
+            "planner/cost_tier_routing.rs should re-rank resolved candidates, not own resolution/ranking {forbidden}"
+        );
+    }
+
+    let candidate_materialization = read_workspace_file(
+        "apps/aether-gateway/src/ai_serving/planner/candidate_materialization.rs",
+    );
+    assert_eq!(
+        candidate_materialization.matches("apply_cost_tier_reranking(").count(),
+        3,
+        "candidate_materialization.rs should apply cost-tier re-ranking at the three materialization entries"
+    );
+    assert!(
+        !read_workspace_file("apps/aether-gateway/src/ai_serving/planner/candidate_resolution.rs")
+            .contains("apply_cost_tier_reranking("),
+        "candidate_resolution.rs must stay free of cost-tier re-ranking so resolved page caches remain canonical"
+    );
 
     let candidate_resolution =
         read_workspace_file("apps/aether-gateway/src/ai_serving/planner/candidate_resolution.rs");
