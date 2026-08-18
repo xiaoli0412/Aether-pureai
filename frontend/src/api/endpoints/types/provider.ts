@@ -202,11 +202,32 @@ export interface UpstreamPolicyConfig {
   empty_response?: UpstreamPolicyEmptyResponseConfig
 }
 
+export interface CostTierStickinessConfig {
+  respect_session_affinity?: boolean
+  respect_cache_affinity?: boolean
+  max_profit_sacrifice_usd?: number
+}
+
+export interface CostTierTierPreferenceConfig {
+  prefer?: 'per_request' | 'per_use'
+}
+
+export interface CostTierConfig {
+  enabled?: boolean
+  context_threshold_tokens?: number
+  tiers?: {
+    below?: CostTierTierPreferenceConfig
+    above?: CostTierTierPreferenceConfig
+  }
+  stickiness?: CostTierStickinessConfig
+}
+
 export interface ProviderConfig {
   chat_pii_redaction?: ChatPiiRedactionProviderConfig
   codex?: CodexProviderConfig
   responses_websocket?: ResponsesWebSocketProviderConfig
   upstream_policy?: UpstreamPolicyConfig
+  cost_tier?: CostTierConfig
   pool_advanced?: PoolAdvancedConfig
   failover_rules?: FailoverRulesConfig
   claude_code_advanced?: ClaudeCodeAdvancedConfig
@@ -934,6 +955,7 @@ export interface ProviderWithEndpointsSummary {
   kiro_simulated_cache_enabled?: boolean
   responses_websocket_enabled?: boolean
   upstream_policy?: UpstreamPolicyConfig | null
+  cost_tier?: CostTierConfig | null
   ops_quota_alert_enabled?: boolean
   created_at: string
   updated_at: string

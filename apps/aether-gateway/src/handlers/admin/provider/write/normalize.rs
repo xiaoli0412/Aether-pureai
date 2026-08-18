@@ -363,6 +363,130 @@ fn validate_upstream_policy_value(value: &serde_json::Value) -> Result<(), Strin
     Ok(())
 }
 
+pub(crate) fn set_cost_tier(
+    config: &mut serde_json::Map<String, serde_json::Value>,
+    policy: serde_json::Value,
+) -> Result<(), String> {
+    validate_cost_tier_value(&policy)?;
+    if policy.is_null() {
+        config.remove("cost_tier");
+    } else {
+        config.insert("cost_tier".to_string(), policy);
+    }
+    Ok(())
+}
+
+pub(crate) fn remove_cost_tier(config: &mut serde_json::Map<String, serde_json::Value>) {
+    config.remove("cost_tier");
+}
+
+pub(crate) fn validate_cost_tier_config(
+    config: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), String> {
+    match config.get("cost_tier") {
+        None | Some(serde_json::Value::Null) => Ok(()),
+        Some(value) => validate_cost_tier_value(value),
+    }
+}
+
+fn validate_cost_tier_value(value: &serde_json::Value) -> Result<(), String> {
+    if value.is_null() {
+        return Ok(());
+    }
+    let object = value
+        .as_object()
+        .ok_or_else(|| "config.cost_tier 必须是 JSON 对象".to_string())?;
+    for key in object.keys() {
+        if !matches!(
+            key.as_str(),
+            "enabled" | "context_threshold_tokens" | "tiers" | "stickiness"
+        ) {
+            return Err(format!("config.cost_tier 包含未知字段 {key}"));
+        }
+    }
+    if let Some(enabled) = object.get("enabled") {
+        if !enabled.is_boolean() {
+            return Err("config.cost_tier.enabled 必须是布尔值".to_string());
+        }
+    }
+    if let Some(threshold) = object.get("context_threshold_tokens") {
+        let threshold = threshold
+            .as_u64()
+            .ok_or_else(|| "config.cost_tier.context_threshold_tokens 必须是正整数".to_string())?;
+        if threshold == 0 {
+            return Err("config.cost_tier.context_threshold_tokens 必须大于 0".to_string());
+        }
+    }
+    if let Some(tiers) = object.get("tiers") {
+        let tiers = tiers
+            .as_object()
+            .ok_or_else(|| "config.cost_tier.tiers 必须是 JSON 对象".to_string())?;
+        for key in tiers.keys() {
+            if !matches!(key.as_str(), "below" | "above") {
+                return Err(format!("config.cost_tier.tiers 包含未知字段 {key}"));
+            }
+        }
+        for tier_name in ["below", "above"] {
+            if let Some(tier) = tiers.get(tier_name) {
+                let tier = tier.as_object().ok_or_else(|| {
+                    format!("config.cost_tier.tiers.{tier_name} 必须是 JSON 对象")
+                })?;
+                for key in tier.keys() {
+                    if key != "prefer" {
+                        return Err(format!(
+                            "config.cost_tier.tiers.{tier_name} 包含未知字段 {key}"
+                        ));
+                    }
+                }
+                if let Some(prefer) = tier.get("prefer") {
+                    let prefer = prefer.as_str().ok_or_else(|| {
+                        format!("config.cost_tier.tiers.{tier_name}.prefer 必须是字符串")
+                    })?;
+                    if !matches!(prefer, "per_request" | "per_use") {
+                        return Err(format!(
+                            "config.cost_tier.tiers.{tier_name}.prefer 必须是 per_request 或 per_use"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    if let Some(stickiness) = object.get("stickiness") {
+        let stickiness = stickiness
+            .as_object()
+            .ok_or_else(|| "config.cost_tier.stickiness 必须是 JSON 对象".to_string())?;
+        for key in stickiness.keys() {
+            if !matches!(
+                key.as_str(),
+                "respect_session_affinity" | "respect_cache_affinity" | "max_profit_sacrifice_usd"
+            ) {
+                return Err(format!("config.cost_tier.stickiness 包含未知字段 {key}"));
+            }
+        }
+        for bool_key in ["respect_session_affinity", "respect_cache_affinity"] {
+            if let Some(flag) = stickiness.get(bool_key) {
+                if !flag.is_boolean() {
+                    return Err(format!(
+                        "config.cost_tier.stickiness.{bool_key} 必须是布尔值"
+                    ));
+                }
+            }
+        }
+        if let Some(sacrifice) = stickiness.get("max_profit_sacrifice_usd") {
+            let sacrifice = sacrifice.as_f64().ok_or_else(|| {
+                "config.cost_tier.stickiness.max_profit_sacrifice_usd 必须是数字".to_string()
+            })?;
+            if sacrifice.is_nan() || sacrifice.is_infinite() || sacrifice < 0.0 {
+                return Err(
+                    "config.cost_tier.stickiness.max_profit_sacrifice_usd 必须是非负有限数字"
+                        .to_string(),
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_vertex_api_formats(
     provider_type: &str,
     auth_type: &str,
@@ -413,8 +537,9 @@ mod tests {
         normalize_api_format_list, normalize_auth_type, normalize_auth_type_by_format,
         normalize_chat_pii_redaction_config, normalize_pool_advanced_config,
         normalize_provider_type_input, normalize_rate_multipliers,
-        reconcile_allow_auth_channel_mismatch_formats, remove_responses_websocket_enabled,
-        remove_upstream_policy, set_responses_websocket_enabled, set_upstream_policy,
+        reconcile_allow_auth_channel_mismatch_formats, remove_cost_tier,
+        remove_responses_websocket_enabled, remove_upstream_policy, set_cost_tier,
+        set_responses_websocket_enabled, set_upstream_policy, validate_cost_tier_config,
         validate_responses_websocket_config, validate_upstream_policy_config,
         validate_vertex_api_formats,
     };
@@ -715,5 +840,82 @@ mod tests {
         remove_upstream_policy(&mut config);
         assert!(config.get("upstream_policy").is_none());
         validate_upstream_policy_config(&config).unwrap();
+    }
+
+    #[test]
+    fn validate_cost_tier_accepts_full_schema() {
+        let mut config = serde_json::Map::new();
+        set_cost_tier(
+            &mut config,
+            json!({
+                "enabled": true,
+                "context_threshold_tokens": 32000,
+                "tiers": {
+                    "below": { "prefer": "per_use" },
+                    "above": { "prefer": "per_request" }
+                },
+                "stickiness": {
+                    "respect_session_affinity": true,
+                    "respect_cache_affinity": true,
+                    "max_profit_sacrifice_usd": 0.0
+                }
+            }),
+        )
+        .unwrap();
+        validate_cost_tier_config(&config).unwrap();
+        assert!(config.get("cost_tier").is_some());
+
+        // Absent or null cost_tier is valid (feature uninstalled).
+        let empty = serde_json::Map::new();
+        validate_cost_tier_config(&empty).unwrap();
+    }
+
+    #[test]
+    fn validate_cost_tier_rejects_bad_shapes() {
+        for bad in [
+            json!("enabled"),
+            json!({ "enabled": "yes" }),
+            json!({ "context_threshold_tokens": 0 }),
+            json!({ "context_threshold_tokens": -5 }),
+            json!({ "context_threshold_tokens": "32000" }),
+            json!({ "tiers": "both" }),
+            json!({ "tiers": { "middle": { "prefer": "per_use" } } }),
+            json!({ "tiers": { "below": { "prefer": "cheapest" } } }),
+            json!({ "tiers": { "above": { "prefer": 5 } } }),
+            json!({ "tiers": { "below": { "unknown": 1 } } }),
+            json!({ "stickiness": "on" }),
+            json!({ "stickiness": { "respect_session_affinity": "yes" } }),
+            json!({ "stickiness": { "max_profit_sacrifice_usd": -1.0 } }),
+            json!({ "stickiness": { "unknown_field": 1 } }),
+            json!({ "unknown_field": 1 }),
+        ] {
+            let mut config = serde_json::Map::new();
+            config.insert("cost_tier".to_string(), bad);
+            assert!(
+                validate_cost_tier_config(&config).is_err(),
+                "expected rejection"
+            );
+        }
+    }
+
+    #[test]
+    fn set_cost_tier_null_removes_and_remove_clears_namespace() {
+        let mut config = serde_json::Map::new();
+        set_cost_tier(
+            &mut config,
+            json!({ "enabled": true, "context_threshold_tokens": 1000 }),
+        )
+        .unwrap();
+        set_cost_tier(&mut config, json!(null)).unwrap();
+        assert!(config.get("cost_tier").is_none());
+
+        set_cost_tier(
+            &mut config,
+            json!({ "enabled": true, "context_threshold_tokens": 2000 }),
+        )
+        .unwrap();
+        remove_cost_tier(&mut config);
+        assert!(config.get("cost_tier").is_none());
+        validate_cost_tier_config(&config).unwrap();
     }
 }

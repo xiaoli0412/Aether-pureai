@@ -10,6 +10,7 @@ use crate::AppState;
 pub(crate) const CYBER_CONTINUE_FAILOVER_CONFIG_KEY: &str = "cyber_continue_failover";
 pub(crate) const RESPONSES_WEBSOCKET_CONFIG_KEY: &str = "responses_websocket";
 pub(crate) const UPSTREAM_POLICY_CONFIG_KEY: &str = "upstream_policy";
+pub(crate) const COST_TIER_CONFIG_KEY: &str = "cost_tier";
 
 /// How a provider responds once its empty-response retry budget is exhausted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +30,62 @@ pub(crate) struct LocalEmptyResponsePolicy {
     pub(crate) on_exhausted: LocalEmptyResponseExhaustion,
 }
 
+/// The billing model a cost-tier routing decision prefers for a candidate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CostTierBillingPreference {
+    /// Flat per-request settlement (`price_per_request`).
+    PerRequest,
+    /// Token-metered settlement.
+    PerUse,
+}
+
+/// Session/cache stickiness allowances applied when re-ranking by cost tier.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct CostTierStickiness {
+    pub(crate) respect_session_affinity: bool,
+    pub(crate) respect_cache_affinity: bool,
+    /// Max profit (USD) the router may sacrifice to keep stickiness; 0 means
+    /// profit is an absolute priority.
+    pub(crate) max_profit_sacrifice_usd: f64,
+}
+
+// `max_profit_sacrifice_usd` is a finite config-sourced USD amount; a manual
+// `Eq` marker keeps the containing policy usable where `Eq` is required.
+impl Eq for CostTierStickiness {}
+
+impl Default for CostTierStickiness {
+    fn default() -> Self {
+        Self {
+            respect_session_affinity: true,
+            respect_cache_affinity: true,
+            max_profit_sacrifice_usd: 0.0,
+        }
+    }
+}
+
+/// Provider-scoped cost-tier routing policy: route requests to a billing tier
+/// based on estimated context size, maximizing profit while honoring
+/// stickiness where it does not cost more than `max_profit_sacrifice_usd`.
+/// Inactive unless `enabled` and a positive `context_threshold_tokens` are set.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub(crate) struct CostTierPolicy {
+    pub(crate) enabled: bool,
+    pub(crate) context_threshold_tokens: Option<u64>,
+    pub(crate) below_preference: Option<CostTierBillingPreference>,
+    pub(crate) above_preference: Option<CostTierBillingPreference>,
+    pub(crate) stickiness: CostTierStickiness,
+}
+
+impl Eq for CostTierPolicy {}
+
+impl CostTierPolicy {
+    /// True when this policy should influence routing. An inactive policy is
+    /// behaviorally identical to no configuration at all.
+    pub(crate) fn is_active(&self) -> bool {
+        self.enabled && self.context_threshold_tokens.is_some()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LocalFailoverPolicy {
     pub(crate) max_retries: Option<u64>,
@@ -45,6 +102,7 @@ pub(crate) struct LocalFailoverPolicy {
     pub(crate) enforced_max_attempts: Option<u64>,
     pub(crate) passthrough_upstream_errors: bool,
     pub(crate) empty_response_policy: Option<LocalEmptyResponsePolicy>,
+    pub(crate) cost_tier: CostTierPolicy,
 }
 
 impl Default for LocalFailoverPolicy {
@@ -64,6 +122,7 @@ impl Default for LocalFailoverPolicy {
             enforced_max_attempts: None,
             passthrough_upstream_errors: false,
             empty_response_policy: None,
+            cost_tier: CostTierPolicy::default(),
         }
     }
 }
@@ -168,6 +227,7 @@ pub(crate) fn local_failover_policy_from_transport(
         enforced_max_attempts: upstream_policy.max_attempts,
         passthrough_upstream_errors: upstream_policy.passthrough_errors,
         empty_response_policy: upstream_policy.empty_response,
+        cost_tier: parse_cost_tier_fields(provider_config.and_then(Value::as_object)),
         stop_status_codes: rules
             .map(|value| {
                 parse_status_code_set(
@@ -253,6 +313,7 @@ pub(crate) fn local_failover_policy_from_report_context(
         enforced_max_attempts: upstream_policy.max_attempts,
         passthrough_upstream_errors: upstream_policy.passthrough_errors,
         empty_response_policy: upstream_policy.empty_response,
+        cost_tier: parse_cost_tier_fields(Some(object)),
     })
 }
 
@@ -304,7 +365,7 @@ fn parse_status_code_list(value: &Value) -> BTreeSet<u16> {
 }
 
 fn local_failover_policy_to_value(policy: &LocalFailoverPolicy) -> Value {
-    json!({
+    let mut value = json!({
         "max_retries": policy.max_retries,
         "max_transfer_count": policy.max_transfer_count,
         "max_transfer_timeout_seconds": policy.max_transfer_timeout_seconds,
@@ -316,7 +377,13 @@ fn local_failover_policy_to_value(policy: &LocalFailoverPolicy) -> Value {
         "stop_cyber_policy_errors": policy.stop_cyber_policy_errors,
         "retry_client_errors_by_default": policy.retry_client_errors_by_default,
         UPSTREAM_POLICY_CONFIG_KEY: upstream_policy_to_value(policy),
-    })
+    });
+    if let (Value::Object(object), Some(cost_tier)) =
+        (&mut value, cost_tier_to_value(&policy.cost_tier))
+    {
+        object.insert(COST_TIER_CONFIG_KEY.to_string(), cost_tier);
+    }
+    value
 }
 
 #[derive(Debug, Clone, Default)]
@@ -375,6 +442,98 @@ fn parse_empty_response_policy(empty: &serde_json::Map<String, Value>) -> LocalE
             _ => LocalEmptyResponseExhaustion::Error,
         },
     }
+}
+
+fn parse_cost_tier_fields(container: Option<&serde_json::Map<String, Value>>) -> CostTierPolicy {
+    let Some(cost_tier) = container
+        .and_then(|config| config.get(COST_TIER_CONFIG_KEY))
+        .and_then(Value::as_object)
+    else {
+        return CostTierPolicy::default();
+    };
+
+    let tiers = cost_tier.get("tiers").and_then(Value::as_object);
+    let stickiness = cost_tier.get("stickiness").and_then(Value::as_object);
+
+    CostTierPolicy {
+        enabled: cost_tier
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        context_threshold_tokens: cost_tier
+            .get("context_threshold_tokens")
+            .and_then(parse_u64_value)
+            .filter(|value| *value > 0),
+        below_preference: tiers
+            .and_then(|tiers| tiers.get("below"))
+            .and_then(Value::as_object)
+            .and_then(|tier| tier.get("prefer"))
+            .and_then(Value::as_str)
+            .and_then(parse_cost_tier_billing_preference),
+        above_preference: tiers
+            .and_then(|tiers| tiers.get("above"))
+            .and_then(Value::as_object)
+            .and_then(|tier| tier.get("prefer"))
+            .and_then(Value::as_str)
+            .and_then(parse_cost_tier_billing_preference),
+        stickiness: CostTierStickiness {
+            respect_session_affinity: stickiness
+                .and_then(|value| value.get("respect_session_affinity"))
+                .and_then(Value::as_bool)
+                .unwrap_or(true),
+            respect_cache_affinity: stickiness
+                .and_then(|value| value.get("respect_cache_affinity"))
+                .and_then(Value::as_bool)
+                .unwrap_or(true),
+            max_profit_sacrifice_usd: stickiness
+                .and_then(|value| value.get("max_profit_sacrifice_usd"))
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0),
+        },
+    }
+}
+
+fn parse_cost_tier_billing_preference(value: &str) -> Option<CostTierBillingPreference> {
+    let normalized = value.trim();
+    if normalized.eq_ignore_ascii_case("per_request") {
+        return Some(CostTierBillingPreference::PerRequest);
+    }
+    if normalized.eq_ignore_ascii_case("per_use") {
+        return Some(CostTierBillingPreference::PerUse);
+    }
+    None
+}
+
+fn cost_tier_billing_preference_to_str(preference: CostTierBillingPreference) -> &'static str {
+    match preference {
+        CostTierBillingPreference::PerRequest => "per_request",
+        CostTierBillingPreference::PerUse => "per_use",
+    }
+}
+
+/// Serializes an active cost-tier policy. Returns `None` when the policy is
+/// inactive so an unconfigured provider behaves exactly as before.
+fn cost_tier_to_value(policy: &CostTierPolicy) -> Option<Value> {
+    if !policy.is_active() {
+        return None;
+    }
+    let preference = |value: Option<CostTierBillingPreference>| match value {
+        Some(preference) => json!(cost_tier_billing_preference_to_str(preference)),
+        None => Value::Null,
+    };
+    Some(json!({
+        "enabled": policy.enabled,
+        "context_threshold_tokens": policy.context_threshold_tokens,
+        "tiers": {
+            "below": { "prefer": preference(policy.below_preference) },
+            "above": { "prefer": preference(policy.above_preference) },
+        },
+        "stickiness": {
+            "respect_session_affinity": policy.stickiness.respect_session_affinity,
+            "respect_cache_affinity": policy.stickiness.respect_cache_affinity,
+            "max_profit_sacrifice_usd": policy.stickiness.max_profit_sacrifice_usd,
+        },
+    }))
 }
 
 fn upstream_policy_to_value(policy: &LocalFailoverPolicy) -> Value {
@@ -552,8 +711,9 @@ mod tests {
     use super::{
         append_local_failover_policy_to_value, local_failover_policy_from_report_context,
         local_failover_policy_from_transport, responses_websocket_adapter,
-        responses_websocket_enabled, LocalEmptyResponseExhaustion, LocalEmptyResponsePolicy,
-        LocalFailoverPolicy, LocalFailoverRegexRule, ResponsesWebSocketAdapter,
+        responses_websocket_enabled, CostTierBillingPreference, CostTierPolicy, CostTierStickiness,
+        LocalEmptyResponseExhaustion, LocalEmptyResponsePolicy, LocalFailoverPolicy,
+        LocalFailoverRegexRule, ResponsesWebSocketAdapter,
     };
     use crate::provider_transport::snapshot::{
         GatewayProviderTransportEndpoint, GatewayProviderTransportKey,
@@ -668,6 +828,7 @@ mod tests {
                 enforced_max_attempts: None,
                 passthrough_upstream_errors: false,
                 empty_response_policy: None,
+                cost_tier: CostTierPolicy::default(),
             })
         );
     }
@@ -944,5 +1105,164 @@ mod tests {
         ));
         assert_eq!(policy.enforced_max_attempts, None);
         assert_eq!(policy.empty_response_policy.unwrap().max_attempts, 100);
+    }
+
+    #[test]
+    fn cost_tier_is_inactive_without_configuration() {
+        let policy = local_failover_policy_from_transport(&sample_transport(None, None, None));
+        assert_eq!(policy.cost_tier, CostTierPolicy::default());
+        assert!(!policy.cost_tier.is_active());
+    }
+
+    #[test]
+    fn cost_tier_parses_full_schema() {
+        let policy = local_failover_policy_from_transport(&sample_transport(
+            None,
+            None,
+            Some(json!({
+                "cost_tier": {
+                    "enabled": true,
+                    "context_threshold_tokens": 32000,
+                    "tiers": {
+                        "below": { "prefer": "per_use" },
+                        "above": { "prefer": "per_request" }
+                    },
+                    "stickiness": {
+                        "respect_session_affinity": true,
+                        "respect_cache_affinity": false,
+                        "max_profit_sacrifice_usd": 0.5
+                    }
+                }
+            })),
+        ));
+        let cost_tier = policy.cost_tier;
+        assert!(cost_tier.is_active());
+        assert!(cost_tier.enabled);
+        assert_eq!(cost_tier.context_threshold_tokens, Some(32000));
+        assert_eq!(
+            cost_tier.below_preference,
+            Some(CostTierBillingPreference::PerUse)
+        );
+        assert_eq!(
+            cost_tier.above_preference,
+            Some(CostTierBillingPreference::PerRequest)
+        );
+        assert_eq!(
+            cost_tier.stickiness,
+            CostTierStickiness {
+                respect_session_affinity: true,
+                respect_cache_affinity: false,
+                max_profit_sacrifice_usd: 0.5,
+            }
+        );
+    }
+
+    #[test]
+    fn cost_tier_inactive_when_disabled_or_threshold_missing() {
+        let disabled = local_failover_policy_from_transport(&sample_transport(
+            None,
+            None,
+            Some(json!({
+                "cost_tier": {
+                    "enabled": false,
+                    "context_threshold_tokens": 32000
+                }
+            })),
+        ));
+        assert!(!disabled.cost_tier.is_active());
+
+        let no_threshold = local_failover_policy_from_transport(&sample_transport(
+            None,
+            None,
+            Some(json!({
+                "cost_tier": { "enabled": true }
+            })),
+        ));
+        assert!(!no_threshold.cost_tier.is_active());
+
+        let zero_threshold = local_failover_policy_from_transport(&sample_transport(
+            None,
+            None,
+            Some(json!({
+                "cost_tier": { "enabled": true, "context_threshold_tokens": 0 }
+            })),
+        ));
+        assert!(!zero_threshold.cost_tier.is_active());
+    }
+
+    #[test]
+    fn cost_tier_ignores_unknown_billing_preference() {
+        let policy = local_failover_policy_from_transport(&sample_transport(
+            None,
+            None,
+            Some(json!({
+                "cost_tier": {
+                    "enabled": true,
+                    "context_threshold_tokens": 1000,
+                    "tiers": {
+                        "below": { "prefer": "nonsense" },
+                        "above": { "prefer": "per_use" }
+                    }
+                }
+            })),
+        ));
+        assert!(policy.cost_tier.is_active());
+        assert_eq!(policy.cost_tier.below_preference, None);
+        assert_eq!(
+            policy.cost_tier.above_preference,
+            Some(CostTierBillingPreference::PerUse)
+        );
+        // Stickiness defaults when the block is absent.
+        assert_eq!(policy.cost_tier.stickiness, CostTierStickiness::default());
+    }
+
+    #[test]
+    fn cost_tier_round_trips_through_report_context_when_active() {
+        let report_context = append_local_failover_policy_to_value(
+            json!({}),
+            &sample_transport(
+                None,
+                None,
+                Some(json!({
+                    "cost_tier": {
+                        "enabled": true,
+                        "context_threshold_tokens": 8192,
+                        "tiers": {
+                            "below": { "prefer": "per_use" },
+                            "above": { "prefer": "per_request" }
+                        }
+                    }
+                })),
+            ),
+        );
+        let restored = local_failover_policy_from_report_context(Some(&report_context))
+            .expect("policy should restore");
+        assert!(restored.cost_tier.is_active());
+        assert_eq!(restored.cost_tier.context_threshold_tokens, Some(8192));
+        assert_eq!(
+            restored.cost_tier.below_preference,
+            Some(CostTierBillingPreference::PerUse)
+        );
+        assert_eq!(
+            restored.cost_tier.above_preference,
+            Some(CostTierBillingPreference::PerRequest)
+        );
+    }
+
+    #[test]
+    fn inactive_cost_tier_is_omitted_from_report_context() {
+        let report_context =
+            append_local_failover_policy_to_value(json!({}), &sample_transport(None, None, None));
+        let embedded = report_context
+            .get("local_failover_policy")
+            .and_then(|value| value.as_object())
+            .expect("embedded policy should exist");
+        assert!(
+            !embedded.contains_key("cost_tier"),
+            "inactive cost_tier must not alter the embedded policy shape"
+        );
+        let restored = local_failover_policy_from_report_context(Some(&report_context))
+            .expect("policy should restore");
+        assert!(!restored.cost_tier.is_active());
     }
 }

@@ -373,7 +373,7 @@ mod tests {
     };
     use crate::data::GatewayDataState;
     use crate::orchestration::{
-        resolve_local_failover_policy, LocalFailoverPolicy, LocalFailoverRegexRule,
+        resolve_local_failover_policy, CostTierPolicy, LocalFailoverPolicy, LocalFailoverRegexRule,
     };
     use crate::AppState;
 
@@ -957,6 +957,7 @@ mod tests {
                 enforced_max_attempts: None,
                 passthrough_upstream_errors: false,
                 empty_response_policy: None,
+                cost_tier: CostTierPolicy::default(),
             }
         );
     }
