@@ -2177,6 +2177,22 @@ pub trait UsageWriteRepository: Send + Sync {
         let _ = (window, targets, mode);
         Ok(UsageCleanupPreviewCounts::default())
     }
+
+    /// Performs a targeted update of the `request_metadata` JSON for the usage
+    /// row identified by `request_id`, leaving every other column untouched.
+    ///
+    /// Returns `true` when a row was updated. Backends that do not persist
+    /// targeted metadata updates keep the default no-op and report `false`, so
+    /// callers (e.g. the diagnostics summarizer) degrade gracefully instead of
+    /// failing.
+    async fn update_request_metadata(
+        &self,
+        request_id: &str,
+        request_metadata: serde_json::Value,
+    ) -> Result<bool, crate::DataLayerError> {
+        let _ = (request_id, request_metadata);
+        Ok(false)
+    }
 }
 
 pub trait UsageRepository: UsageReadRepository + UsageWriteRepository + Send + Sync {}

@@ -3388,6 +3388,21 @@ impl UsageWriteRepository for InMemoryUsageReadRepository {
         provider_catalog.rebuild_usage_stats(&aggregates);
         Ok(aggregates.len() as u64)
     }
+
+    async fn update_request_metadata(
+        &self,
+        request_id: &str,
+        request_metadata: serde_json::Value,
+    ) -> Result<bool, DataLayerError> {
+        let mut by_request_id = self.by_request_id.write().expect("usage repository lock");
+        match by_request_id.get_mut(request_id) {
+            Some(item) => {
+                item.request_metadata = Some(request_metadata);
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
 }
 
 #[cfg(test)]

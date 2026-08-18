@@ -10602,6 +10602,28 @@ impl UsageWriteRepository for SqlxUsageReadRepository {
     {
         cleanup::preview_usage_cleanup_impl(&self.pool, window, targets, mode).await
     }
+
+    async fn update_request_metadata(
+        &self,
+        request_id: &str,
+        request_metadata: serde_json::Value,
+    ) -> Result<bool, DataLayerError> {
+        let metadata_json = json_bind_text(Some(&request_metadata))?;
+        let result = sqlx::query(
+            r#"
+UPDATE "usage"
+SET request_metadata = $2::json,
+    updated_at = NOW()
+WHERE request_id = $1
+"#,
+        )
+        .bind(request_id)
+        .bind(metadata_json)
+        .execute(&self.pool)
+        .await
+        .map_postgres_err()?;
+        Ok(result.rows_affected() > 0)
+    }
 }
 
 struct StalePendingUsageRow {

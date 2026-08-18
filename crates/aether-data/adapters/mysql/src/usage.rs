@@ -1447,6 +1447,32 @@ WHERE request_id = ?
     ) -> Result<UsageCleanupPreviewCounts, DataLayerError> {
         cleanup::preview_usage_cleanup(&self.pool, window, targets, mode).await
     }
+
+    async fn update_request_metadata(
+        &self,
+        request_id: &str,
+        request_metadata: serde_json::Value,
+    ) -> Result<bool, DataLayerError> {
+        let metadata = serde_json::to_string(&request_metadata).map_err(|err| {
+            DataLayerError::UnexpectedValue(format!(
+                "failed to serialize usage request metadata: {err}"
+            ))
+        })?;
+        let result = sqlx::query(
+            r#"
+UPDATE `usage`
+SET request_metadata = ?,
+    updated_at_unix_secs = UNIX_TIMESTAMP()
+WHERE request_id = ?
+"#,
+        )
+        .bind(metadata)
+        .bind(request_id)
+        .execute(&self.pool)
+        .await
+        .map_sql_err()?;
+        Ok(result.rows_affected() > 0)
+    }
 }
 
 struct StalePendingUsageRow {
