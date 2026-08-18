@@ -69,7 +69,20 @@
 
 ### `POST /api/admin/diagnostics/{request_id}/summarize`
 
-AI 摘要（可装卸模块，见下）。
+AI 摘要（可装卸模块，见下）。成功返回：
+
+```jsonc
+{
+  "request_id": "req-xxx",
+  "summary": "上游返回空响应，疑似被风控拦截……",
+  "cached": false,          // true 表示命中已有摘要，未再调用模型
+  "persisted": true,        // 摘要是否已回填到用量记录
+  "summarized_at_unix_secs": 1755000000
+}
+```
+
+查询参数 `refresh=true` 可忽略缓存强制重新生成。未知 `request_id` 返回 `404`；
+摘要器后端调用失败返回 `502`。
 
 ## AI 摘要（可装卸模块）
 
@@ -77,17 +90,21 @@ AI 摘要（可装卸模块，见下）。
 
 ```jsonc
 "error_diagnostic_summarizer": {
-  "base_url": "https://api.openai.com/v1",
+  "base_url": "https://api.openai.com/v1",   // OpenAI 兼容服务根地址
   "api_key": "sk-...",
-  "model": "gpt-4o-mini"
+  "model": "gpt-4o-mini",
+  "timeout_secs": 30                          // 可选，默认 30
 }
 ```
 
-- **未配置** = 模块"卸下"：`summarize` 端点明确拒绝（当前实现返回 `501`，
-  配置化摘要器接入后为 `503` + 明确错误码）。
-- **已配置** = 模块"装上"：组装提示（kind、上游状态、上游错误体节选、请求路径/模型；
-  不含下游请求体全文以控成本）→ 调 OpenAI 兼容 chat completions → 摘要回填
-  `request_metadata.error_diagnostic.summary` 并缓存。
+- **未配置（或字段不完整）** = 模块"卸下"：`summarize` 端点返回 `503`，
+  `detail` 中说明需要先配置 `error_diagnostic_summarizer`，网关不会发起任何模型调用。
+- **已配置** = 模块"装上"：组装提示（诊断标记 kind/上游状态/分类/消息、网关错误字段、
+  模型与 provider、上游响应体节选（≤4KB 截断）；**不含下游请求体全文**以控成本并避免回显密钥）
+  → 调 OpenAI 兼容 `chat/completions` → 摘要回填
+  `request_metadata.error_diagnostic.summary` 并记录 `summarized_at_unix_secs`。
+- **缓存**：24 小时内的摘要直接返回（`cached: true`），不重复付费；`refresh=true` 绕过。
+- **失败隔离**：模型调用失败只影响该次 summarize（返回 `502`），不影响诊断记录本身。
 
 ## 封禁一个滥用用户的操作流程
 
