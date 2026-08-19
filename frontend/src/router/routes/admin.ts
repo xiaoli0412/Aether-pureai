@@ -131,6 +131,18 @@ export const adminRoutes: RouteRecordRaw[] = [
         meta: { module: 'chat_pii_redaction' }
       },
       {
+        path: 'modules/error-diagnostics',
+        name: 'ErrorDiagnosticsSettings',
+        component: view(() => import('@/views/admin/modules/ErrorDiagnosticsSettings.vue')),
+        meta: { module: 'error_diagnostics' }
+      },
+      {
+        path: 'modules/empty-response-shield',
+        name: 'EmptyResponseShieldSettings',
+        component: view(() => import('@/views/admin/modules/EmptyResponseShieldSettings.vue')),
+        meta: { module: 'empty_response_shield' }
+      },
+      {
         path: 'modules/s3-backup',
         name: 'S3BackupSettings',
         component: view(() => import('@/views/admin/modules/S3BackupSettings.vue')),

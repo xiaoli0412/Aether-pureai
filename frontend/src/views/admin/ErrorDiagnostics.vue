@@ -13,7 +13,7 @@
               错误诊断
             </h3>
             <p class="text-xs text-muted-foreground mt-0.5">
-              追踪上游失败请求的取证记录，定位滥用来源
+              追踪上游失败请求的取证记录，定位滥用来源；点击行查看完整请求详情
             </p>
           </div>
           <div class="flex flex-wrap items-center gap-2">
@@ -170,6 +170,9 @@
               <TableHead class="h-12 font-semibold">
                 信息
               </TableHead>
+              <TableHead class="h-12 font-semibold text-right">
+                操作
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -229,6 +232,19 @@
               >
                 {{ record.message || '无信息' }}
               </TableCell>
+
+              <TableCell class="py-4 text-right">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  class="h-8 px-2 text-xs"
+                  title="生成/查看 AI 摘要"
+                  @click.stop="openSummary(record)"
+                >
+                  <Sparkles class="h-3.5 w-3.5 mr-1" />
+                  AI 摘要
+                </Button>
+              </TableCell>
             </TableRow>
           </TableBody>
         </Table>
@@ -253,13 +269,15 @@
                   {{ formatDateTime(record.created_at) }}
                 </div>
               </div>
-              <Badge
-                v-if="statusCodeFor(record) !== null"
-                :variant="getStatusCodeVariant(statusCodeFor(record))"
-                class="shrink-0"
+              <Button
+                variant="ghost"
+                size="sm"
+                class="h-8 px-2 text-xs shrink-0"
+                @click.stop="openSummary(record)"
               >
-                {{ statusCodeFor(record) }}
-              </Badge>
+                <Sparkles class="h-3.5 w-3.5 mr-1" />
+                摘要
+              </Button>
             </div>
             <div class="text-sm">
               {{ record.model || '-' }} · {{ record.provider_name || '未知提供商' }}
@@ -289,256 +307,107 @@
       </div>
     </Card>
 
-    <!-- 详情加载指示器 -->
-    <div
-      v-if="detailLoading && !detail"
-      class="fixed inset-0 bg-black/30 flex items-center justify-center z-50"
-    >
-      <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
-    </div>
+    <!-- 完整请求详情抽屉（与使用记录同款多视图呈现） -->
+    <RequestDetailDrawer
+      :is-open="detailOpen"
+      :request-id="selectedUsageId"
+      @close="detailOpen = false"
+    />
 
-    <!-- 取证详情对话框 -->
+    <!-- AI 摘要弹窗 -->
     <div
-      v-if="detail"
+      v-if="summaryRecord"
       class="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
-      @click="closeDetail"
+      @click="closeSummary"
     >
       <Card
-        class="max-w-4xl w-full mx-4 max-h-[85vh] overflow-y-auto"
+        class="max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto"
         @click.stop
       >
         <div class="p-6 space-y-4">
           <div class="flex justify-between items-center">
             <div class="min-w-0">
-              <h3 class="text-lg font-medium">
-                诊断详情
+              <h3 class="text-lg font-medium flex items-center gap-2">
+                <Sparkles class="h-4 w-4 text-primary" />
+                AI 摘要
               </h3>
               <p
                 class="text-xs text-muted-foreground truncate"
-                :title="detail.request_id"
+                :title="summaryRecord.request_id"
               >
-                请求 ID：{{ detail.request_id }}
+                {{ kindLabel(summaryRecord.kind) }} · {{ summaryRecord.request_id }}
               </p>
             </div>
             <Button
               variant="ghost"
               size="sm"
-              @click="closeDetail"
+              @click="closeSummary"
             >
               <X class="h-4 w-4" />
             </Button>
           </div>
 
-          <!-- 概览 -->
-          <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
-            <div>
-              <Label>类型</Label>
-              <div class="mt-1">
-                <Badge :variant="kindBadgeVariant(diagnosticKind)">
-                  {{ kindLabel(diagnosticKind) }}
-                </Badge>
-              </div>
-            </div>
-            <div>
-              <Label>上游状态</Label>
-              <p class="mt-1">
-                <Badge
-                  v-if="detailUpstreamStatus !== null"
-                  :variant="getStatusCodeVariant(detailUpstreamStatus)"
-                >
-                  {{ detailUpstreamStatus }}
-                </Badge>
-                <span v-else>-</span>
-              </p>
-            </div>
-            <div>
-              <Label>最终状态</Label>
-              <p class="mt-1">
-                {{ detail.status || '-' }}
-                <span v-if="detail.status_code !== null">（{{ detail.status_code }}）</span>
-              </p>
-            </div>
-            <div>
-              <Label>模型</Label>
-              <p class="mt-1">
-                {{ detail.model || '-' }}
-                <span
-                  v-if="detail.target_model"
-                  class="text-xs text-muted-foreground"
-                > → {{ detail.target_model }}</span>
-              </p>
-            </div>
-            <div>
-              <Label>提供商</Label>
-              <p class="mt-1">
-                {{ detail.provider_name || '-' }}
-              </p>
-            </div>
-            <div>
-              <Label>格式 / 流式</Label>
-              <p class="mt-1">
-                {{ detail.api_format || '-' }} / {{ detail.is_stream ? '流式' : '同步' }}
-              </p>
-            </div>
-            <div>
-              <Label>用户</Label>
-              <p class="mt-1">
-                {{ detail.user_id || '-' }}
-              </p>
-            </div>
-            <div>
-              <Label>密钥</Label>
-              <p
-                class="mt-1 truncate"
-                :title="detail.api_key_id || ''"
-              >
-                {{ detail.api_key_id || '-' }}
-              </p>
-            </div>
-            <div>
-              <Label>会话ID</Label>
-              <p
-                class="mt-1 truncate font-mono text-xs"
-                :title="detail.session_id || detail.request_fingerprint || ''"
-              >
-                {{ detail.session_id || detail.request_fingerprint || '-' }}
-              </p>
-            </div>
-            <div>
-              <Label>时间</Label>
-              <p class="mt-1">
-                {{ formatDateTime(detail.created_at) }}
-              </p>
-            </div>
+          <div
+            v-if="summaryRecord.message"
+            class="text-xs text-muted-foreground bg-muted/50 rounded-md px-3 py-2 whitespace-pre-wrap break-words"
+          >
+            {{ summaryRecord.message }}
           </div>
 
-          <div v-if="diagnosticMessage">
-            <Label>诊断信息</Label>
-            <p class="mt-1 text-sm whitespace-pre-wrap break-words">
-              {{ diagnosticMessage }}
-            </p>
-          </div>
-
-          <div v-if="detail.error_message">
-            <Label>错误消息</Label>
-            <p class="mt-1 text-sm text-destructive whitespace-pre-wrap break-words">
-              {{ detail.error_message }}
-            </p>
-          </div>
-
-          <Separator />
-
-          <!-- AI 摘要 -->
-          <div class="space-y-2">
-            <div class="flex items-center justify-between gap-2">
-              <div class="flex items-center gap-2">
-                <Sparkles class="h-4 w-4 text-primary" />
-                <Label>AI 摘要</Label>
-                <span
-                  v-if="summaryMeta"
-                  class="text-xs text-muted-foreground"
-                >
-                  {{ summaryMeta }}
-                </span>
-              </div>
-              <div class="flex items-center gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  :disabled="summarizing"
-                  @click="generateSummary(false)"
-                >
-                  <Loader2
-                    v-if="summarizing"
-                    class="h-3.5 w-3.5 mr-1 animate-spin"
-                  />
-                  <Sparkles
-                    v-else
-                    class="h-3.5 w-3.5 mr-1"
-                  />
-                  {{ summaryText ? '查看摘要' : '生成摘要' }}
-                </Button>
-                <Button
-                  v-if="summaryText"
-                  size="sm"
-                  variant="ghost"
-                  :disabled="summarizing"
-                  title="绕过缓存重新生成"
-                  @click="generateSummary(true)"
-                >
-                  <RefreshCw class="h-3.5 w-3.5" />
-                </Button>
-              </div>
-            </div>
-            <p
-              v-if="summaryError"
-              class="text-sm text-destructive whitespace-pre-wrap break-words"
+          <div class="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              :disabled="summarizing"
+              @click="generateSummary(false)"
             >
-              {{ summaryError }}
-            </p>
-            <p
-              v-else-if="summaryText"
-              class="text-sm bg-muted p-3 rounded-md whitespace-pre-wrap break-words"
+              <Loader2
+                v-if="summarizing"
+                class="h-3.5 w-3.5 mr-1 animate-spin"
+              />
+              <Sparkles
+                v-else
+                class="h-3.5 w-3.5 mr-1"
+              />
+              {{ summaryText ? '重新获取' : '生成摘要' }}
+            </Button>
+            <Button
+              v-if="summaryText"
+              size="sm"
+              variant="ghost"
+              :disabled="summarizing"
+              title="绕过缓存强制重新生成"
+              @click="generateSummary(true)"
             >
-              {{ summaryText }}
-            </p>
-            <p
-              v-else-if="!summarizing"
+              <RefreshCw class="h-3.5 w-3.5 mr-1" />
+              强制重新生成
+            </Button>
+            <span
+              v-if="summaryMeta"
               class="text-xs text-muted-foreground"
             >
-              尚未生成摘要。点击"生成摘要"调用已配置的 AI 摘要器（未配置时返回 503）。
-            </p>
+              {{ summaryMeta }}
+            </span>
           </div>
 
-          <Separator />
-
-          <!-- 诊断标记原始 JSON -->
-          <div v-if="detail.error_diagnostic">
-            <Label>诊断标记（error_diagnostic）</Label>
-            <pre class="mt-1 text-xs bg-muted p-3 rounded-md overflow-x-auto max-h-64 overflow-y-auto">{{ prettyJson(detail.error_diagnostic) }}</pre>
-          </div>
-
-          <!-- 四段取证捕获 -->
-          <div
-            v-for="capture in captureSections"
-            :key="capture.key"
-            class="border border-border/60 rounded-md"
+          <p
+            v-if="summaryError"
+            class="text-sm text-destructive whitespace-pre-wrap break-words"
           >
-            <button
-              class="w-full flex items-center justify-between px-3 py-2 text-sm font-medium hover:bg-muted/30 transition-colors"
-              @click="toggleCapture(capture.key)"
-            >
-              <span class="flex items-center gap-2">
-                <component
-                  :is="captureOpen[capture.key] ? ChevronDown : ChevronRight"
-                  class="h-4 w-4"
-                />
-                {{ capture.label }}
-              </span>
-              <span class="text-xs text-muted-foreground">
-                {{ capturePresent(capture.value) ? '有数据' : '无数据' }}
-              </span>
-            </button>
-            <div
-              v-if="captureOpen[capture.key]"
-              class="px-3 pb-3 space-y-2"
-            >
-              <div v-if="capture.value?.headers">
-                <Label class="text-xs">请求/响应头</Label>
-                <pre class="mt-1 text-xs bg-muted p-2 rounded-md overflow-x-auto max-h-40 overflow-y-auto">{{ prettyJson(capture.value.headers) }}</pre>
-              </div>
-              <div v-if="capture.value?.body !== null && capture.value?.body !== undefined">
-                <Label class="text-xs">正文</Label>
-                <pre class="mt-1 text-xs bg-muted p-2 rounded-md overflow-x-auto max-h-72 overflow-y-auto">{{ prettyJson(capture.value.body) }}</pre>
-              </div>
-              <p
-                v-if="!capturePresent(capture.value)"
-                class="text-xs text-muted-foreground pb-1"
-              >
-                该段未捕获任何数据。
-              </p>
-            </div>
-          </div>
+            {{ summaryError }}
+          </p>
+          <p
+            v-else-if="summaryText"
+            class="text-sm bg-muted p-3 rounded-md whitespace-pre-wrap break-words"
+          >
+            {{ summaryText }}
+          </p>
+          <p
+            v-else-if="!summarizing"
+            class="text-xs text-muted-foreground"
+          >
+            尚未生成摘要。点击"生成摘要"调用已配置的 AI 摘要器；未配置时请先在 模块管理 → 错误诊断 中完成配置。
+          </p>
         </div>
       </Card>
     </div>
@@ -546,13 +415,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, onBeforeUnmount, computed } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import {
   Card,
   Button,
   Badge,
-  Separator,
-  Label,
   Select,
   SelectTrigger,
   SelectValue,
@@ -570,12 +437,11 @@ import {
   Pagination,
   RefreshButton
 } from '@/components/ui'
+import { RequestDetailDrawer } from '@/features/usage/components'
 import {
   diagnosticsApi,
   diagnosticErrorMessage,
-  type DiagnosticRecord,
-  type DiagnosticDetail,
-  type DiagnosticCapture
+  type DiagnosticRecord
 } from '@/api/diagnostics'
 import {
   Search,
@@ -584,9 +450,7 @@ import {
   FilterX,
   Sparkles,
   RefreshCw,
-  Loader2,
-  ChevronDown,
-  ChevronRight
+  Loader2
 } from 'lucide-vue-next'
 import { useRowClick } from '@/composables/useRowClick'
 import { useToast } from '@/composables/useToast'
@@ -597,13 +461,18 @@ const { handleMouseDown, shouldTriggerRowClick } = useRowClick()
 
 const loading = ref(false)
 const records = ref<DiagnosticRecord[]>([])
-const detail = ref<DiagnosticDetail | null>(null)
-const detailLoading = ref(false)
+let recordsRequestId = 0
+
+// 详情抽屉（复用使用记录的请求详情组件，多视图呈现请求/响应/头部）
+const detailOpen = ref(false)
+const selectedUsageId = ref<string | null>(null)
+
+// AI 摘要弹窗
+const summaryRecord = ref<DiagnosticRecord | null>(null)
 const summarizing = ref(false)
 const summaryText = ref('')
 const summaryError = ref<string | null>(null)
 const summaryMeta = ref('')
-let recordsRequestId = 0
 
 const searchQuery = ref('')
 const apiKeyQuery = ref('')
@@ -645,40 +514,6 @@ const hasActiveFilters = computed(() => {
     apiKeyQuery.value !== '' ||
     filters.value.kind !== '__all__' ||
     filters.value.days !== 7
-})
-
-const diagnosticKind = computed(() => {
-  const kind = detail.value?.error_diagnostic?.kind
-  return typeof kind === 'string' ? kind : null
-})
-
-const diagnosticMessage = computed(() => {
-  const message = detail.value?.error_diagnostic?.message
-  if (typeof message === 'string' && message.length > 0) return message
-  return ''
-})
-
-const detailUpstreamStatus = computed(() => {
-  const status = detail.value?.error_diagnostic?.upstream_status
-  return typeof status === 'number' ? status : null
-})
-
-const captureSections = computed(() => {
-  const value = detail.value
-  if (!value) return []
-  return [
-    { key: 'request', label: '客户端请求', value: value.request },
-    { key: 'provider_request', label: '上游请求', value: value.provider_request },
-    { key: 'response', label: '上游响应', value: value.response },
-    { key: 'client_response', label: '客户端响应', value: value.client_response },
-  ] as Array<{ key: string; label: string; value: DiagnosticCapture | undefined }>
-})
-
-const captureOpen = reactive<Record<string, boolean>>({
-  request: false,
-  provider_request: false,
-  response: true,
-  client_response: false,
 })
 
 async function loadRecords() {
@@ -762,54 +597,28 @@ function handleRowClick(event: MouseEvent, record: DiagnosticRecord) {
   openDetail(record)
 }
 
-async function openDetail(record: DiagnosticRecord) {
-  const requestId = ++recordsRequestId
-  detail.value = null
-  summaryText.value = ''
-  summaryError.value = null
-  summaryMeta.value = ''
-  detailLoading.value = true
-  try {
-    const payload = await diagnosticsApi.getDiagnosticDetail(record.request_id, true)
-    if (requestId !== recordsRequestId) return
-    detail.value = payload
-    hydrateSummaryFromDetail()
-  } catch (error) {
-    if (requestId !== recordsRequestId) return
-    log.error('获取诊断详情失败:', error)
-    toast({
-      title: '获取诊断详情失败',
-      description: diagnosticErrorMessage(error),
-      variant: 'destructive'
-    })
-  } finally {
-    if (requestId === recordsRequestId) {
-      detailLoading.value = false
-    }
-  }
+// 行点击打开与使用记录一致的请求详情抽屉（按用量记录 ID 拉取完整取证数据）
+function openDetail(record: DiagnosticRecord) {
+  selectedUsageId.value = record.usage_id
+  detailOpen.value = true
 }
 
-function closeDetail() {
-  detail.value = null
+function openSummary(record: DiagnosticRecord) {
+  summaryRecord.value = record
   summaryText.value = ''
   summaryError.value = null
   summaryMeta.value = ''
 }
 
-function hydrateSummaryFromDetail() {
-  const diagnostic = detail.value?.error_diagnostic
-  const summary = diagnostic?.summary
-  if (typeof summary === 'string' && summary.length > 0) {
-    summaryText.value = summary
-    const summarizedAt = diagnostic?.summarized_at_unix_secs
-    summaryMeta.value = typeof summarizedAt === 'number'
-      ? `（已持久化 · ${formatDateTime(new Date(summarizedAt * 1000).toISOString())}）`
-      : '（已持久化）'
-  }
+function closeSummary() {
+  summaryRecord.value = null
+  summaryText.value = ''
+  summaryError.value = null
+  summaryMeta.value = ''
 }
 
 async function generateSummary(refresh: boolean) {
-  const target = detail.value
+  const target = summaryRecord.value
   if (!target || summarizing.value) return
   summarizing.value = true
   summaryError.value = null
@@ -819,29 +628,12 @@ async function generateSummary(refresh: boolean) {
     summaryMeta.value = result.cached
       ? `（缓存 · ${formatDateTime(new Date(result.summarized_at_unix_secs * 1000).toISOString())}）`
       : `（${result.persisted ? '已持久化' : '未持久化'} · ${formatDateTime(new Date(result.summarized_at_unix_secs * 1000).toISOString())}）`
-    if (detail.value) {
-      const diagnostic = detail.value.error_diagnostic ?? {}
-      diagnostic.summary = result.summary
-      diagnostic.summarized_at_unix_secs = result.summarized_at_unix_secs
-      detail.value.error_diagnostic = diagnostic
-    }
   } catch (error) {
     log.error('生成 AI 摘要失败:', error)
     summaryError.value = diagnosticErrorMessage(error)
   } finally {
     summarizing.value = false
   }
-}
-
-function toggleCapture(key: string) {
-  captureOpen[key] = !captureOpen[key]
-}
-
-function capturePresent(capture: DiagnosticCapture | undefined): boolean {
-  if (!capture) return false
-  const hasHeaders = capture.headers !== null && capture.headers !== undefined
-  const hasBody = capture.body !== null && capture.body !== undefined
-  return hasHeaders || hasBody
 }
 
 function statusCodeFor(record: DiagnosticRecord): number | null {
@@ -873,15 +665,6 @@ function getStatusCodeVariant(statusCode: number | null): 'default' | 'success' 
   if (statusCode < 400) return 'default'
   if (statusCode < 500) return 'warning'
   return 'destructive'
-}
-
-function prettyJson(value: unknown): string {
-  try {
-    if (typeof value === 'string') return value
-    return JSON.stringify(value, null, 2)
-  } catch {
-    return String(value)
-  }
 }
 
 function formatDateTime(dateStr: string): string {

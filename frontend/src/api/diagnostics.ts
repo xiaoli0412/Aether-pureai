@@ -121,3 +121,34 @@ export function diagnosticErrorMessage(error: unknown): string {
   }
   return error instanceof Error ? error.message : String(error)
 }
+
+// ---- 回空屏蔽（empty-response shield）管理端 ----
+
+export interface ShieldBlockedEntry {
+  key: string
+  kind: 'session' | 'fingerprint' | string
+  remaining_secs: number
+}
+
+export interface ShieldStatus {
+  installed: boolean
+  config: { threshold: number; window_secs: number; block_secs: number } | null
+  blocked: ShieldBlockedEntry[]
+  total: number
+}
+
+export const shieldApi = {
+  // 查看屏蔽状态与被屏蔽键列表
+  async getStatus(): Promise<ShieldStatus> {
+    const response = await apiClient.get('/api/admin/empty-response-shield')
+    return response.data
+  },
+
+  // 手动解除某个会话/指纹的屏蔽
+  async unblock(key: string): Promise<{ key: string; unblocked: boolean }> {
+    const response = await apiClient.delete(
+      `/api/admin/empty-response-shield/${encodeURIComponent(key)}`
+    )
+    return response.data
+  }
+}
