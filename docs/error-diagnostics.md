@@ -127,3 +127,4 @@ AI 摘要（可装卸模块，见下）。成功返回：
 ## 相关文档
 
 - [upstream-policy](upstream-policy.md) — 上游透传/重试策略（决定失败如何产生）
+- [empty-response-shield](empty-response-shield.md) — 持续回空的本地熔断屏蔽（止损）
