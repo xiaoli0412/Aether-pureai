@@ -444,6 +444,8 @@ pub struct AppState {
     pub(crate) provider_delete_tasks: Arc<StdMutex<HashMap<String, LocalProviderDeleteTaskState>>>,
     pub(crate) empty_response_budget:
         Arc<crate::execution_runtime::empty_response::EmptyResponseBudgetTracker>,
+    pub(crate) empty_response_shield:
+        Arc<crate::execution_runtime::empty_response_shield::EmptyResponseShieldTracker>,
     #[cfg(test)]
     pub(crate) turnstile_siteverify_url_override: Option<String>,
     #[cfg(test)]

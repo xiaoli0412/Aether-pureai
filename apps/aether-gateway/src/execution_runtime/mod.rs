@@ -8,6 +8,7 @@ pub(crate) mod attempt_lifecycle;
 mod chatgpt_web_image;
 mod constants;
 pub(crate) mod empty_response;
+pub(crate) mod empty_response_shield;
 mod fallback;
 mod grok;
 mod kiro_cache;

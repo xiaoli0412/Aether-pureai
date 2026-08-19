@@ -517,6 +517,30 @@ pub(super) fn classify_admin_observability_family_route(
     } else if method == http::Method::GET
         && matches!(
             normalized_path,
+            "/api/admin/empty-response-shield" | "/api/admin/empty-response-shield/"
+        )
+    {
+        Some(classified(
+            "admin_proxy",
+            "empty_response_shield_manage",
+            "list",
+            "admin:usage",
+            false,
+        ))
+    } else if method == http::Method::DELETE
+        && normalized_path_no_trailing.starts_with("/api/admin/empty-response-shield/")
+        && normalized_path_no_trailing.matches('/').count() == 4
+    {
+        Some(classified(
+            "admin_proxy",
+            "empty_response_shield_manage",
+            "unblock",
+            "admin:usage",
+            false,
+        ))
+    } else if method == http::Method::GET
+        && matches!(
+            normalized_path,
             "/api/admin/stats/providers/quota-usage" | "/api/admin/stats/providers/quota-usage/"
         )
     {

@@ -6702,6 +6702,11 @@ async fn execute_stream_from_frame_stream_with_retry_scope(
             &provider_prefetched_body,
         )
     {
+        // F4 shield: count this empty response against the session/fingerprint.
+        crate::execution_runtime::empty_response_shield::record_shield_strike_from_report_context(
+            state,
+            report_context.as_ref(),
+        );
         let observed = state
             .empty_response_budget
             .record_empty_response(request_id);

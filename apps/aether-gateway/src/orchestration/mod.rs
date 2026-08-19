@@ -14,6 +14,7 @@ mod oauth_error;
 mod policy;
 mod recovery;
 mod report_effects;
+mod shield_key;
 
 pub(crate) use self::adaptive::{
     project_local_adaptive_rate_limit, project_local_adaptive_success,
@@ -74,6 +75,7 @@ pub(crate) use self::report_effects::{
     apply_local_report_effect, store_local_gemini_file_mapping,
     sync_codex_websocket_quota_metadata, LocalReportEffect,
 };
+pub(crate) use self::shield_key::request_fingerprint_from_headers_body;
 
 pub(crate) async fn resolve_local_failover_analysis_for_attempt(
     state: &AppState,

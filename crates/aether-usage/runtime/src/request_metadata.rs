@@ -354,6 +354,8 @@ fn copy_allowed_metadata_fields(source: &Map<String, Value>, target: &mut Map<St
     copy_non_empty_string(source, target, "request_path");
     copy_non_empty_string(source, target, "request_query_string");
     copy_non_empty_string(source, target, "request_path_and_query");
+    copy_non_empty_string(source, target, "session_id");
+    copy_non_empty_string(source, target, "request_fingerprint");
     copy_non_empty_string(source, target, REQUESTED_REASONING_EFFORT_METADATA_KEY);
     copy_non_empty_string(source, target, PROVIDER_REASONING_EFFORT_METADATA_KEY);
     copy_non_empty_string(source, target, PROVIDER_SERVICE_TIER_METADATA_KEY);
@@ -411,6 +413,8 @@ fn move_allowed_metadata_fields(mut source: Map<String, Value>, target: &mut Map
     remove_non_empty_string(&mut source, target, "request_path");
     remove_non_empty_string(&mut source, target, "request_query_string");
     remove_non_empty_string(&mut source, target, "request_path_and_query");
+    remove_non_empty_string(&mut source, target, "session_id");
+    remove_non_empty_string(&mut source, target, "request_fingerprint");
     remove_non_empty_string(&mut source, target, REQUESTED_REASONING_EFFORT_METADATA_KEY);
     remove_non_empty_string(&mut source, target, PROVIDER_REASONING_EFFORT_METADATA_KEY);
     remove_non_empty_string(&mut source, target, PROVIDER_SERVICE_TIER_METADATA_KEY);
@@ -785,6 +789,8 @@ mod tests {
     fn sanitizes_request_metadata_preserves_error_diagnostic_and_drops_secrets() {
         let metadata = sanitize_usage_request_metadata(Some(json!({
             "trace_id": "trace-diag",
+            "session_id": "conversation-123",
+            "request_fingerprint": "fp-abc",
             "error_diagnostic": {
                 "kind": "empty_response",
                 "upstream_status": 200,
@@ -797,6 +803,8 @@ mod tests {
             metadata,
             json!({
                 "trace_id": "trace-diag",
+                "session_id": "conversation-123",
+                "request_fingerprint": "fp-abc",
                 "error_diagnostic": {
                     "kind": "empty_response",
                     "upstream_status": 200,

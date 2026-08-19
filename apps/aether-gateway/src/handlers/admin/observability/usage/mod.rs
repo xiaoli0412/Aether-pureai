@@ -8,6 +8,7 @@ mod detail_routes;
 mod diagnostics_routes;
 mod diagnostics_summarizer;
 mod replay;
+mod shield_routes;
 mod summary_routes;
 
 pub(crate) async fn maybe_build_local_admin_usage_response(
@@ -22,7 +23,7 @@ pub(crate) async fn maybe_build_local_admin_usage_response(
     let route_family = decision.route_family.as_deref();
     if !matches!(
         route_family,
-        Some("usage_manage") | Some("diagnostics_manage")
+        Some("usage_manage") | Some("diagnostics_manage") | Some("empty_response_shield_manage")
     ) {
         return Ok(None);
     }
@@ -33,6 +34,11 @@ pub(crate) async fn maybe_build_local_admin_usage_response(
             request_context,
         )
         .await;
+    }
+
+    if route_family == Some("empty_response_shield_manage") {
+        return shield_routes::maybe_build_local_admin_shield_response(state, request_context)
+            .await;
     }
 
     if let Some(response) = detail_routes::maybe_build_local_admin_usage_detail_response(

@@ -129,6 +129,11 @@ pub(crate) fn build_local_execution_report_context(
         parts.request_path,
         parts.request_query_string,
     );
+    insert_session_identity_fields(
+        &mut extra_fields,
+        parts.original_request_body_json,
+        parts.original_headers,
+    );
     let client_requested_stream = parts.client_requested_stream
         || parts
             .request_path
@@ -172,6 +177,32 @@ pub(crate) fn build_local_execution_report_context(
         needs_conversion: parts.needs_conversion,
         extra_fields,
     })
+}
+
+/// Injects the session identity fields used by the empty-response shield
+/// (F4) and surfaced in usage records: the extracted session id when the
+/// client body carries one, and otherwise a stable request fingerprint. Both
+/// are derived from the client's original body/headers so they match the
+/// values computed at the pre-dispatch shield gate.
+fn insert_session_identity_fields(
+    extra_fields: &mut Map<String, Value>,
+    original_request_body_json: Option<&Value>,
+    original_headers: &http::HeaderMap,
+) {
+    let Some(body_json) = original_request_body_json else {
+        return;
+    };
+    if let Some(session_id) = crate::ai_serving::extract_pool_sticky_session_token(body_json) {
+        extra_fields
+            .entry("session_id".to_string())
+            .or_insert_with(|| Value::String(session_id));
+        return;
+    }
+    let fingerprint =
+        crate::orchestration::request_fingerprint_from_headers_body(original_headers, body_json);
+    extra_fields
+        .entry("request_fingerprint".to_string())
+        .or_insert_with(|| Value::String(fingerprint));
 }
 
 fn insert_request_path_fields(

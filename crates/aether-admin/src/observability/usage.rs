@@ -1381,6 +1381,11 @@ pub fn admin_usage_record_json(
         "request_path_and_query",
         admin_usage_metadata_string(item, "request_path_and_query"),
     );
+    maybe_insert_string_field(
+        object,
+        "session_id",
+        admin_usage_metadata_string(item, "session_id"),
+    );
     if let Some(reasoning_effort) = item.provider_reasoning_effort() {
         object.insert("reasoning_effort".to_string(), json!(reasoning_effort));
     }
@@ -2156,6 +2161,14 @@ fn admin_diagnostics_metadata_field(item: &StoredRequestUsageAudit, name: &str) 
         .unwrap_or(Value::Null)
 }
 
+fn admin_diagnostics_request_metadata_field(item: &StoredRequestUsageAudit, name: &str) -> Value {
+    item.request_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get(name))
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
 /// Projects a usage audit carrying an `error_diagnostic` marker into a compact
 /// list row for the diagnostics surface.
 pub fn admin_diagnostics_record_json(item: &StoredRequestUsageAudit) -> Value {
@@ -2167,6 +2180,9 @@ pub fn admin_diagnostics_record_json(item: &StoredRequestUsageAudit) -> Value {
         "classification": admin_diagnostics_metadata_field(item, "classification"),
         "decision": admin_diagnostics_metadata_field(item, "decision"),
         "message": admin_diagnostics_metadata_field(item, "message"),
+        "session_id": admin_diagnostics_request_metadata_field(item, "session_id"),
+        "request_fingerprint":
+            admin_diagnostics_request_metadata_field(item, "request_fingerprint"),
         "user_id": item.user_id,
         "api_key_id": item.api_key_id,
         "model": item.model,
@@ -2201,6 +2217,9 @@ pub fn build_admin_diagnostics_detail_payload(
         "status_code": item.status_code,
         "error_message": item.error_message,
         "error_category": item.error_category,
+        "session_id": admin_diagnostics_request_metadata_field(item, "session_id"),
+        "request_fingerprint":
+            admin_diagnostics_request_metadata_field(item, "request_fingerprint"),
         "user_id": item.user_id,
         "api_key_id": item.api_key_id,
         "model": item.model,

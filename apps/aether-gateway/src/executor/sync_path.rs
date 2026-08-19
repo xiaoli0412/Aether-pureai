@@ -73,6 +73,18 @@ pub(crate) async fn maybe_execute_via_sync_decision_path(
         }
     }
 
+    // Empty-response shield (F4): if this request's session/fingerprint is
+    // currently blocked after repeated empty upstream responses, answer
+    // locally with a safety-review style response instead of dispatching.
+    if let Some(shielded) =
+        crate::execution_runtime::empty_response_shield::maybe_build_shielded_local_response(
+            state, parts, &body_json, trace_id, decision, plan_kind, false,
+        )
+        .await?
+    {
+        return Ok(LocalExecutionRequestOutcome::Responded(shielded));
+    }
+
     let bypass_cache_key =
         build_direct_plan_bypass_cache_key(plan_kind, parts, body_bytes, decision);
     if should_skip_direct_plan(state, &bypass_cache_key) {

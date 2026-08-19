@@ -406,6 +406,9 @@ impl AppState {
             empty_response_budget: Arc::new(
                 crate::execution_runtime::empty_response::EmptyResponseBudgetTracker::new(),
             ),
+            empty_response_shield: Arc::new(
+                crate::execution_runtime::empty_response_shield::EmptyResponseShieldTracker::new(),
+            ),
             #[cfg(test)]
             turnstile_siteverify_url_override: None,
             #[cfg(test)]

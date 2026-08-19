@@ -967,6 +967,12 @@ fn local_empty_provider_success_message(
         return None;
     }
 
+    // F4 shield: count this empty response against the session/fingerprint.
+    crate::execution_runtime::empty_response_shield::record_shield_strike_from_report_context(
+        state,
+        report_context,
+    );
+
     let observed = state
         .empty_response_budget
         .record_empty_response(plan.request_id.as_str());
