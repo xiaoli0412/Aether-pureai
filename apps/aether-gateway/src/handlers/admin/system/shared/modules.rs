@@ -75,6 +75,30 @@ pub(crate) const ADMIN_MODULE_DEFINITIONS: &[AdminModuleDefinition] = &[
         admin_menu_order: 59,
     },
     AdminModuleDefinition {
+        name: "error_diagnostics",
+        display_name: "错误诊断",
+        description: "记录上游回空/4xx/5xx 的完整取证信息，支持按会话精准检索，并可配置 AI 摘要器自动总结错误。",
+        category: "monitoring",
+        env_key: "ERROR_DIAGNOSTICS_AVAILABLE",
+        default_available: true,
+        admin_route: Some("/admin/modules/error-diagnostics"),
+        admin_menu_icon: Some("Bug"),
+        admin_menu_group: Some("system"),
+        admin_menu_order: 58,
+    },
+    AdminModuleDefinition {
+        name: "empty_response_shield",
+        display_name: "回空屏蔽",
+        description: "上游对同一会话/请求持续回空时自动本地屏蔽一段时间，直接返回安全审查风格响应，避免浪费上游配额。",
+        category: "security",
+        env_key: "EMPTY_RESPONSE_SHIELD_AVAILABLE",
+        default_available: true,
+        admin_route: Some("/admin/modules/empty-response-shield"),
+        admin_menu_icon: Some("ShieldAlert"),
+        admin_menu_group: Some("system"),
+        admin_menu_order: 57,
+    },
+    AdminModuleDefinition {
         name: "important_notification",
         display_name: "通知服务",
         description: "统一管理通知项、模板和推送服务选择，供后台任务和用户通知使用",
@@ -225,6 +249,12 @@ pub(crate) fn admin_module_enabled_config_key(module: &AdminModuleDefinition) ->
         IMPORTANT_NOTIFICATION_ENABLED_KEY.to_string()
     } else if module.name == "s3_backup" {
         crate::backup::S3_BACKUP_ENABLED_KEY.to_string()
+    } else if module.name == "empty_response_shield" {
+        // The shield keeps its enabled flag inside the runtime config object
+        // (`empty_response_shield.enabled`) so the module toggle and the
+        // runtime gate share one source of truth.
+        crate::execution_runtime::empty_response_shield::EMPTY_RESPONSE_SHIELD_CONFIG_KEY
+            .to_string()
     } else {
         format!("module.{}.enabled", module.name)
     }
@@ -237,6 +267,16 @@ fn admin_module_available(module: &AdminModuleDefinition) -> bool {
         return module_available_from_env(module.env_key, legacy_default);
     }
     module_available_from_env(module.env_key, module.default_available)
+}
+
+/// Reads the shield's enabled flag from inside its config object
+/// (`empty_response_shield.enabled`); absent config means not installed.
+fn empty_response_shield_enabled(config_value: Option<&serde_json::Value>) -> bool {
+    config_value
+        .and_then(serde_json::Value::as_object)
+        .and_then(|object| object.get("enabled"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
 }
 
 pub(crate) fn oauth_module_config_is_valid(
@@ -357,7 +397,15 @@ pub(crate) async fn build_admin_module_status_payload(
         } else {
             enabled_value
         };
-        system_config_bool(enabled_value.as_ref(), false)
+        if module.name == "empty_response_shield" {
+            // The shield stores its enabled flag inside the config object.
+            empty_response_shield_enabled(enabled_value.as_ref())
+        } else if module.name == "error_diagnostics" {
+            // Core observability feature: enabled unless explicitly disabled.
+            system_config_bool(enabled_value.as_ref(), true)
+        } else {
+            system_config_bool(enabled_value.as_ref(), false)
+        }
     } else {
         false
     };

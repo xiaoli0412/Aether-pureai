@@ -20,6 +20,10 @@ use serde_json::json;
 
 const ADMIN_EXTERNAL_MODELS_CONFIG_ROUTE: &str = "/api/admin/models/external/config";
 
+/// System config key holding the AI diagnostics summarizer settings. Its
+/// nested `api_key` is masked on read and preserved on empty write.
+const DIAGNOSTICS_SUMMARIZER_CONFIG_KEY: &str = "error_diagnostic_summarizer";
+
 fn is_external_models_proxy_node_config_key(key: &str) -> bool {
     key.trim()
         .eq_ignore_ascii_case(ADMIN_EXTERNAL_MODELS_PROXY_NODE_CONFIG_KEY)
@@ -100,10 +104,68 @@ pub(crate) async fn build_admin_system_config_detail_payload(
         }
     }
     let value = value.or_else(|| admin_system_config_default_value(&normalized_key));
+    if normalized_key == DIAGNOSTICS_SUMMARIZER_CONFIG_KEY {
+        // Mask the nested api_key secret; expose only an is_set flag.
+        return Ok(Ok(build_summarizer_config_detail_payload(
+            requested_key,
+            value,
+        )));
+    }
     Ok(build_admin_system_config_detail_payload_pure(
         requested_key,
         value,
     ))
+}
+
+fn build_summarizer_config_detail_payload(
+    requested_key: &str,
+    value: Option<serde_json::Value>,
+) -> serde_json::Value {
+    let mut payload = json!({
+        "key": requested_key,
+        "value": serde_json::Value::Null,
+        "is_set": false,
+    });
+    let Some(mut object) = value.and_then(|value| value.as_object().map(ToOwned::to_owned)) else {
+        return payload;
+    };
+    let api_key_set = object
+        .get("api_key")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty());
+    if object.contains_key("api_key") {
+        object.insert("api_key".to_string(), serde_json::Value::Null);
+    }
+    payload["value"] = serde_json::Value::Object(object);
+    payload["is_set"] = json!(api_key_set);
+    payload
+}
+
+async fn merge_summarizer_api_key(
+    state: &AdminAppState<'_>,
+    value: serde_json::Value,
+) -> Result<serde_json::Value, GatewayError> {
+    let Some(mut object) = value.as_object().map(ToOwned::to_owned) else {
+        return Ok(value);
+    };
+    let incoming_provided = object
+        .get("api_key")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some();
+    if !incoming_provided {
+        // Preserve the previously stored api_key when the client sends none.
+        if let Some(existing) = state
+            .read_system_config_json_value(DIAGNOSTICS_SUMMARIZER_CONFIG_KEY)
+            .await?
+        {
+            if let Some(existing_key) = existing.get("api_key").cloned() {
+                object.insert("api_key".to_string(), existing_key);
+            }
+        }
+    }
+    Ok(serde_json::Value::Object(object))
 }
 
 pub(crate) async fn apply_admin_system_config_update(
@@ -121,6 +183,10 @@ pub(crate) async fn apply_admin_system_config_update(
     let mut value = update.value;
     let normalized_key = update.normalized_key;
     let description = update.description;
+
+    if normalized_key == DIAGNOSTICS_SUMMARIZER_CONFIG_KEY {
+        value = merge_summarizer_api_key(state, value).await?;
+    }
 
     if is_sensitive_admin_system_config_key(&normalized_key)
         && value.as_str().is_some_and(|raw| !raw.is_empty())

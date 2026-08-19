@@ -85,13 +85,33 @@ impl<'a> AdminAppState<'a> {
         }
 
         let enabled_config_key = admin_system_modules::admin_module_enabled_config_key(module);
-        let _ = self
-            .upsert_system_config_json_value(
-                &enabled_config_key,
-                &json!(payload.enabled),
-                Some(&format!("模块 [{}] 启用状态", module.display_name)),
-            )
-            .await?;
+        if module.name == "empty_response_shield" {
+            // The shield keeps its enabled flag inside the runtime config
+            // object; merge instead of overwriting the threshold/window/block
+            // settings.
+            let current = self
+                .read_system_config_json_value(&enabled_config_key)
+                .await?;
+            let mut config_object = current
+                .and_then(|value| value.as_object().map(ToOwned::to_owned))
+                .unwrap_or_default();
+            config_object.insert("enabled".to_string(), json!(payload.enabled));
+            let _ = self
+                .upsert_system_config_json_value(
+                    &enabled_config_key,
+                    &serde_json::Value::Object(config_object),
+                    Some(&format!("模块 [{}] 启用状态", module.display_name)),
+                )
+                .await?;
+        } else {
+            let _ = self
+                .upsert_system_config_json_value(
+                    &enabled_config_key,
+                    &json!(payload.enabled),
+                    Some(&format!("模块 [{}] 启用状态", module.display_name)),
+                )
+                .await?;
+        }
         let updated_runtime = admin_system_modules::build_admin_module_runtime_state(self).await?;
         Ok(Ok(admin_system_modules::build_admin_module_status_payload(
             self,
