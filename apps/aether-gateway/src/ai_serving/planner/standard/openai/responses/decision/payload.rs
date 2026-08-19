@@ -141,6 +141,8 @@ pub(crate) async fn maybe_build_local_openai_responses_decision_payload_for_cand
                 request_origin: Some(crate::ai_serving::request_origin_from_parts(parts)),
                 original_request_body_json,
                 original_request_body_base64: None,
+                client_identity_headers: Some(&parts.headers),
+                client_identity_body_json: Some(body_json),
                 client_session_affinity: input.client_session_affinity.as_ref(),
                 routing_policy: input.routing_policy.as_ref(),
                 scheduler_affinity_epoch: eligible.orchestration.scheduler_affinity_epoch,

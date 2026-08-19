@@ -56,6 +56,12 @@ pub(crate) struct LocalExecutionReportContextParts<'a> {
     pub(crate) request_origin: Option<RequestOrigin>,
     pub(crate) original_request_body_json: Option<&'a Value>,
     pub(crate) original_request_body_base64: Option<&'a str>,
+    /// Raw client request inputs used for shield/session-identity derivation.
+    /// Unlike `original_headers` / `original_request_body_json` (which may
+    /// carry routing-mutated or redacted values), these must be the untouched
+    /// client headers/body so the identity matches the pre-dispatch shield gate.
+    pub(crate) client_identity_headers: Option<&'a http::HeaderMap>,
+    pub(crate) client_identity_body_json: Option<&'a Value>,
     pub(crate) client_session_affinity: Option<&'a ClientSessionAffinity>,
     pub(crate) routing_policy: Option<&'a ResolvedRoutingPolicy>,
     pub(crate) scheduler_affinity_epoch: Option<u64>,
@@ -131,8 +137,12 @@ pub(crate) fn build_local_execution_report_context(
     );
     insert_session_identity_fields(
         &mut extra_fields,
-        parts.original_request_body_json,
-        parts.original_headers,
+        parts
+            .client_identity_body_json
+            .or(parts.original_request_body_json),
+        parts
+            .client_identity_headers
+            .unwrap_or(parts.original_headers),
     );
     let client_requested_stream = parts.client_requested_stream
         || parts
@@ -358,6 +368,8 @@ mod tests {
                 }),
                 original_request_body_json: Some(&json!({"model": "gpt-5"})),
                 original_request_body_base64: None,
+                client_identity_headers: None,
+                client_identity_body_json: None,
                 client_session_affinity: Some(&client_session_affinity),
                 routing_policy: None,
                 scheduler_affinity_epoch: None,
@@ -389,6 +401,103 @@ mod tests {
             report_context["request_path_and_query"],
             "/v1/chat/completions?limit=10"
         );
+    }
+
+    #[test]
+    fn session_identity_uses_raw_client_inputs_over_mutated_originals() {
+        let auth_context = ExecutionRuntimeAuthContext {
+            user_id: "user-1".to_string(),
+            api_key_id: "api-key-1".to_string(),
+            username: None,
+            api_key_name: None,
+            balance_remaining: None,
+            access_allowed: true,
+            api_key_is_standalone: false,
+        };
+
+        // Raw client inputs (what the pre-dispatch shield gate sees).
+        let raw_headers = http::HeaderMap::new();
+        let raw_body = json!({"model": "gpt-5", "messages": []});
+
+        // Routing-mutated/redacted values carried as the "original" fields:
+        // an extra patched header plus a converted provider body.
+        let mut mutated_headers = http::HeaderMap::new();
+        mutated_headers.insert("x-routing-patch", "1".parse().unwrap());
+        let redacted_body = json!({"contents": [{"parts": []}]});
+
+        let build = |identity_headers: Option<&http::HeaderMap>, identity_body: Option<&Value>| {
+            build_local_execution_report_context(LocalExecutionReportContextParts {
+                auth_context: &auth_context,
+                request_id: "trace-1",
+                candidate_id: "candidate-1",
+                attempt_identity: ExecutionAttemptIdentity::new(0, 0),
+                model: "gpt-5",
+                provider_name: "OpenAI",
+                provider_id: "provider-1",
+                endpoint_id: "endpoint-1",
+                key_id: "key-1",
+                key_name: None,
+                model_id: None,
+                global_model_id: None,
+                global_model_name: None,
+                provider_api_format: "gemini:generate_content",
+                client_api_format: "openai:chat",
+                mapped_model: None,
+                candidate_group_id: None,
+                pool_key_lease: None,
+                ranking: None,
+                upstream_url: None,
+                header_rules: None,
+                body_rules: None,
+                provider_request_method: None,
+                provider_request_headers: None,
+                original_headers: &mutated_headers,
+                request_path: Some("/v1/chat/completions"),
+                request_query_string: None,
+                request_origin: None,
+                original_request_body_json: Some(&redacted_body),
+                original_request_body_base64: None,
+                client_identity_headers: identity_headers,
+                client_identity_body_json: identity_body,
+                client_session_affinity: None,
+                routing_policy: None,
+                scheduler_affinity_epoch: None,
+                client_requested_stream: false,
+                upstream_is_stream: false,
+                has_envelope: false,
+                needs_conversion: true,
+                extra_fields: Map::new(),
+            })
+        };
+
+        // With identity fields present, the fingerprint matches the raw
+        // client request, not the mutated headers / redacted body.
+        let context = build(Some(&raw_headers), Some(&raw_body));
+        let expected =
+            crate::orchestration::request_fingerprint_from_headers_body(&raw_headers, &raw_body);
+        let mutated = crate::orchestration::request_fingerprint_from_headers_body(
+            &mutated_headers,
+            &redacted_body,
+        );
+        assert_eq!(
+            context["request_fingerprint"],
+            Value::String(expected.clone())
+        );
+        assert_ne!(
+            context["request_fingerprint"],
+            Value::String(mutated.clone())
+        );
+
+        // Without identity fields the legacy inputs are used (fallback).
+        let fallback = build(None, None);
+        assert_eq!(fallback["request_fingerprint"], Value::String(mutated));
+
+        // Session ids are extracted from the raw body even when the redacted
+        // body no longer carries one.
+        let raw_session_body = json!({"session_id": "sess-77", "messages": []});
+        let context = build(Some(&raw_headers), Some(&raw_session_body));
+        assert_eq!(context["session_id"], "sess-77");
+        assert!(context.get("request_fingerprint").is_none());
     }
 
     #[test]
@@ -441,6 +550,8 @@ mod tests {
                     "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
                 })),
                 original_request_body_base64: None,
+                client_identity_headers: None,
+                client_identity_body_json: None,
                 client_session_affinity: None,
                 routing_policy: None,
                 scheduler_affinity_epoch: None,
@@ -508,6 +619,8 @@ mod tests {
                 request_origin: None,
                 original_request_body_json: Some(&json!({"model": "gpt-5"})),
                 original_request_body_base64: None,
+                client_identity_headers: None,
+                client_identity_body_json: None,
                 client_session_affinity: None,
                 routing_policy: None,
                 scheduler_affinity_epoch: None,

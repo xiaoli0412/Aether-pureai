@@ -110,6 +110,7 @@ async fn shield_list_reports_config_and_blocked_keys() {
     })));
 
     // Record strikes until the session key is blocked (threshold=1).
+    state.empty_response_shield.arm();
     state.empty_response_shield.record_strike("session:conv-1");
     state.empty_response_shield.record_strike("fp:abc123");
     state.empty_response_shield.record_strike("fp:abc123");
@@ -143,6 +144,7 @@ async fn shield_unblock_clears_blocked_key() {
         "window_secs": 600,
         "block_secs": 300
     })));
+    state.empty_response_shield.arm();
     state.empty_response_shield.record_strike("session:conv-9");
 
     let response = local_admin_shield_response(

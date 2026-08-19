@@ -104,18 +104,40 @@ struct EmptyShieldEntry {
 /// In-memory shield state: per-key empty-response strikes. The block window
 /// is evaluated lazily from the strike history so a key stays blocked for
 /// `block_secs` after its most recent qualifying strike.
+///
+/// The tracker stays unarmed until a pre-dispatch gate observes a valid
+/// configuration, so an uninstalled shield never accumulates state.
 #[derive(Debug, Default)]
 pub(crate) struct EmptyResponseShieldTracker {
     entries: Mutex<HashMap<String, EmptyShieldEntry>>,
+    armed: std::sync::atomic::AtomicBool,
+    last_prune_at: Mutex<Option<Instant>>,
 }
+
+/// Minimum interval between background prune sweeps.
+const EMPTY_SHIELD_PRUNE_INTERVAL: Duration = Duration::from_secs(60);
 
 impl EmptyResponseShieldTracker {
     pub(crate) fn new() -> Self {
         Self::default()
     }
 
-    /// Records one empty-response strike for the key.
+    /// Arms strike recording. Called by the pre-dispatch gate whenever a
+    /// valid shield configuration is present.
+    pub(crate) fn arm(&self) {
+        self.armed.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub(crate) fn is_armed(&self) -> bool {
+        self.armed.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Records one empty-response strike for the key. No-op while the shield
+    /// is unarmed (module uninstalled).
     pub(crate) fn record_strike(&self, key: &str) {
+        if !self.is_armed() {
+            return;
+        }
         let mut entries = self.entries.lock();
         if entries.len() >= EMPTY_SHIELD_MAX_ENTRIES {
             prune_locked_entries(&mut entries, DEFAULT_EMPTY_SHIELD_WINDOW_SECS * 4);
@@ -131,6 +153,23 @@ impl EmptyResponseShieldTracker {
             entry.strikes.pop_front();
         }
         entry.touched_at = Instant::now();
+    }
+
+    /// Throttled prune sweep honoring the configured window/block horizon.
+    /// Called from the pre-dispatch gate; runs at most once per
+    /// `EMPTY_SHIELD_PRUNE_INTERVAL`.
+    pub(crate) fn maybe_prune(&self, config: &EmptyResponseShieldConfig) {
+        let now = Instant::now();
+        {
+            let mut last = self.last_prune_at.lock();
+            if last.is_some_and(|instant| now.duration_since(instant) < EMPTY_SHIELD_PRUNE_INTERVAL)
+            {
+                return;
+            }
+            *last = Some(now);
+        }
+        let horizon = config.window_secs + config.block_secs + 300;
+        prune_locked_entries(&mut self.entries.lock(), horizon);
     }
 
     /// Returns how long (seconds) the key remains blocked, or `None` when it
@@ -283,8 +322,7 @@ pub(crate) fn build_shield_local_response(
             Some(json_response(&body))
         }
         CLAUDE_CHAT_STREAM_PLAN_KIND | CLAUDE_CLI_STREAM_PLAN_KIND => {
-            let frame = build_claude_safety_body(&model, remaining_secs);
-            let body = format!("event: message_stop\ndata: {}\n\n", frame);
+            let body = build_claude_safety_sse(&model, remaining_secs);
             Some(sse_response(body))
         }
         _ => None,
@@ -326,6 +364,11 @@ pub(crate) async fn maybe_build_shielded_local_response(
         return Ok(None);
     };
 
+    // The shield is installed: arm strike recording and run a throttled
+    // prune sweep honoring the configured horizon.
+    state.empty_response_shield.arm();
+    state.empty_response_shield.maybe_prune(&config);
+
     let Some(key) = shield_key_for_request(parts, body_json) else {
         return Ok(None);
     };
@@ -362,6 +405,7 @@ pub(crate) async fn maybe_build_shielded_local_response(
         &key,
         remaining_secs,
         status_code,
+        &headers,
         &bytes,
     )
     .await;
@@ -422,6 +466,7 @@ async fn record_shield_blocked_usage(
     shield_key: &str,
     remaining_secs: u64,
     status_code: u16,
+    response_headers: &std::collections::BTreeMap<String, String>,
     response_bytes: &[u8],
 ) {
     if !state.usage_runtime.is_enabled() {
@@ -476,11 +521,10 @@ async fn record_shield_blocked_usage(
         }),
     );
 
-    let mut response_headers = Map::new();
-    response_headers.insert(
-        "content-type".to_string(),
-        Value::String("application/json".to_string()),
-    );
+    let mut response_header_map = Map::new();
+    for (name, value) in response_headers {
+        response_header_map.insert(name.clone(), Value::String(value.clone()));
+    }
 
     let data = aether_usage_runtime::UsageEventData {
         user_id: auth_context.as_ref().map(|context| context.user_id.clone()),
@@ -505,7 +549,7 @@ async fn record_shield_blocked_usage(
         status_code: Some(status_code),
         error_message: Some(message),
         request_body: Some(body_json.clone()),
-        client_response_headers: Some(Value::Object(response_headers.clone())),
+        client_response_headers: Some(Value::Object(response_header_map)),
         client_response_body: Some(client_body),
         route_family: decision.route_family.clone(),
         route_kind: decision.route_kind.clone(),
@@ -647,6 +691,38 @@ fn build_claude_safety_body(model: &str, remaining_secs: u64) -> Value {
     })
 }
 
+/// Claude streaming safety response following the Anthropic SSE protocol:
+/// `message_start` (message envelope) -> `message_delta` (stop_reason) ->
+/// `message_stop`. Strict SDKs parse events as a discriminated union, so a
+/// bare `message_stop` carrying a full message object would be rejected.
+fn build_claude_safety_sse(model: &str, remaining_secs: u64) -> String {
+    let message = build_claude_safety_body(model, remaining_secs);
+    let mut envelope = message.clone();
+    if let Some(object) = envelope.as_object_mut() {
+        object.insert("stop_reason".to_string(), Value::Null);
+    }
+    let message_start = json!({
+        "type": "message_start",
+        "message": envelope,
+    });
+    let message_delta = json!({
+        "type": "message_delta",
+        "delta": { "stop_reason": "refusal", "stop_sequence": null },
+        "usage": { "output_tokens": 0 },
+        "aether_shield": {
+            "blocked": true,
+            "reason": "empty_response_shield",
+            "retry_after_secs": remaining_secs,
+        },
+    });
+    let message_stop = json!({ "type": "message_stop" });
+    format!(
+        "event: message_start\ndata: {message_start}\n\n\
+         event: message_delta\ndata: {message_delta}\n\n\
+         event: message_stop\ndata: {message_stop}\n\n"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -680,6 +756,7 @@ mod tests {
     #[test]
     fn blocks_after_threshold_strikes_then_expires() {
         let tracker = EmptyResponseShieldTracker::new();
+        tracker.arm();
         let cfg = config(2, 600, 300);
         tracker.record_strike("session:a");
         assert!(tracker.blocked_remaining_secs("session:a", &cfg).is_none());
@@ -692,6 +769,7 @@ mod tests {
     #[test]
     fn unblock_clears_strikes() {
         let tracker = EmptyResponseShieldTracker::new();
+        tracker.arm();
         let cfg = config(1, 600, 300);
         tracker.record_strike("fp:x");
         assert!(tracker.blocked_remaining_secs("fp:x", &cfg).is_some());
@@ -703,11 +781,25 @@ mod tests {
     #[test]
     fn blocked_snapshot_lists_blocked_keys() {
         let tracker = EmptyResponseShieldTracker::new();
+        tracker.arm();
         let cfg = config(1, 600, 300);
         tracker.record_strike("session:a");
         tracker.record_strike("session:b");
         let snapshot = tracker.blocked_snapshot(&cfg);
         assert_eq!(snapshot.len(), 2);
+    }
+
+    #[test]
+    fn unarmed_tracker_ignores_strikes() {
+        let tracker = EmptyResponseShieldTracker::new();
+        let cfg = config(1, 600, 300);
+        tracker.record_strike("session:a");
+        assert!(tracker.blocked_remaining_secs("session:a", &cfg).is_none());
+        assert_eq!(tracker.strike_count("session:a"), 0);
+        // Arming enables recording.
+        tracker.arm();
+        tracker.record_strike("session:a");
+        assert_eq!(tracker.strike_count("session:a"), 1);
     }
 
     #[test]
@@ -790,6 +882,45 @@ mod tests {
         let text = String::from_utf8(bytes).expect("utf8");
         assert!(text.contains("content_filter"));
         assert!(text.contains("data: [DONE]"));
+    }
+
+    #[test]
+    fn builds_claude_safety_stream_with_valid_event_sequence() {
+        let body = json!({ "model": "claude-sonnet-4-5" });
+        let (status, headers, bytes) =
+            build_shield_local_response(CLAUDE_CHAT_STREAM_PLAN_KIND, &body, true, 300)
+                .expect("claude chat stream should build");
+        assert_eq!(status, 200);
+        assert_eq!(
+            headers.get("content-type").map(String::as_str),
+            Some("text/event-stream")
+        );
+        let text = String::from_utf8(bytes).expect("utf8");
+        // The Anthropic SSE protocol requires message_start -> message_delta
+        // -> message_stop in that order.
+        let start = text
+            .find("event: message_start")
+            .expect("message_start event");
+        let delta = text
+            .find("event: message_delta")
+            .expect("message_delta event");
+        let stop = text
+            .find("event: message_stop")
+            .expect("message_stop event");
+        assert!(
+            start < delta && delta < stop,
+            "event order must be start->delta->stop"
+        );
+        // message_stop carries only its marker object.
+        let stop_frame = &text[stop..];
+        assert!(stop_frame.contains(r#"{"type":"message_stop"}"#));
+        // message_delta carries the refusal stop_reason.
+        let delta_frame = &text[delta..stop];
+        assert!(delta_frame.contains(r#""stop_reason":"refusal""#));
+        // message_start carries the message envelope.
+        let start_frame = &text[start..delta];
+        assert!(start_frame.contains(r#""type":"message_start""#));
+        assert!(start_frame.contains(r#""role":"assistant""#));
     }
 
     #[test]
