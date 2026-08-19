@@ -17,6 +17,7 @@ mod provider_strategy;
 mod providers;
 mod proxy_nodes;
 mod security;
+mod shield;
 mod stats;
 mod system;
 mod system_import;
