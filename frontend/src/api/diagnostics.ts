@@ -10,6 +10,8 @@ export interface DiagnosticRecord {
   classification: string | null
   decision: string | null
   message: string | null
+  session_id: string | null
+  request_fingerprint: string | null
   user_id: string | null
   api_key_id: string | null
   model: string | null
@@ -50,6 +52,8 @@ export interface DiagnosticDetail {
   status_code: number | null
   error_message: string | null
   error_category: string | null
+  session_id: string | null
+  request_fingerprint: string | null
   user_id: string | null
   api_key_id: string | null
   model: string | null

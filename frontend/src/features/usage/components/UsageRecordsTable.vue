@@ -441,6 +441,10 @@
           class="w-[10%]"
         >
         <col
+          v-if="isColumnVisible('session_id')"
+          class="w-[10%]"
+        >
+        <col
           v-if="isColumnVisible('user_agent')"
           class="w-[13%]"
         >
@@ -484,6 +488,10 @@
         >
         <col
           v-if="isColumnVisible('client_ip')"
+          class="w-[10%]"
+        >
+        <col
+          v-if="isColumnVisible('session_id')"
           class="w-[10%]"
         >
         <col
@@ -649,6 +657,12 @@
             class="h-12 font-semibold w-[10%]"
           >
             IP 地址
+          </TableHead>
+          <TableHead
+            v-if="isColumnVisible('session_id')"
+            class="h-12 font-semibold w-[10%]"
+          >
+            会话ID
           </TableHead>
           <TableHead
             v-if="isColumnVisible('user_agent')"
@@ -976,6 +990,13 @@
             {{ record.client_ip || '-' }}
           </TableCell>
           <TableCell
+            v-if="isColumnVisible('session_id')"
+            class="py-4 w-[10%] text-xs truncate font-mono"
+            :title="record.session_id || '-'"
+          >
+            {{ record.session_id || '-' }}
+          </TableCell>
+          <TableCell
             v-if="isColumnVisible('user_agent')"
             class="py-4 w-[13%] text-xs truncate"
             :title="record.user_agent || '-'"
@@ -1080,6 +1101,7 @@ type UsageRecordColumnId =
   | 'performance'
   | 'client_family'
   | 'client_ip'
+  | 'session_id'
   | 'user_agent'
 
 interface UsageRecordColumnOption {
@@ -1149,6 +1171,7 @@ const USAGE_RECORD_COLUMN_OPTIONS: UsageRecordColumnOption[] = [
   { id: 'performance', label: '耗时/速度' },
   { id: 'client_family', label: '客户端类型' },
   { id: 'client_ip', label: 'IP 地址' },
+  { id: 'session_id', label: '会话ID', adminOnly: true },
   { id: 'user_agent', label: 'User-Agent' },
 ]
 
@@ -1236,6 +1259,7 @@ const desktopTableMinWidthClass = computed(() => {
   const metadataColumnCount = visibleColumnIds.value.filter(column => (
     column === 'client_family' ||
     column === 'client_ip' ||
+    column === 'session_id' ||
     column === 'user_agent'
   )).length
   if (metadataColumnCount >= 3) return 'min-w-[1520px]'

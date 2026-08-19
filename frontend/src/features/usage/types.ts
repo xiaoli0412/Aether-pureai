@@ -129,6 +129,7 @@ export interface UsageRecord {
   user_agent?: string | null
   request_path?: string | null
   request_path_and_query?: string | null
+  session_id?: string | null
   status_code?: number
   error_message?: string
   status?: RequestStatus  // 请求状态: pending, streaming, completed, failed

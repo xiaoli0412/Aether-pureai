@@ -396,6 +396,15 @@
               </p>
             </div>
             <div>
+              <Label>会话ID</Label>
+              <p
+                class="mt-1 truncate font-mono text-xs"
+                :title="detail.session_id || detail.request_fingerprint || ''"
+              >
+                {{ detail.session_id || detail.request_fingerprint || '-' }}
+              </p>
+            </div>
+            <div>
               <Label>时间</Label>
               <p class="mt-1">
                 {{ formatDateTime(detail.created_at) }}
@@ -612,6 +621,7 @@ const kindFilterOptions = [
   { value: 'empty_response', label: '空响应（200）' },
   { value: 'upstream_4xx', label: '上游 4xx' },
   { value: 'upstream_5xx', label: '上游 5xx' },
+  { value: 'empty_response_shield', label: '回空屏蔽' },
 ]
 const daysFilterOptions = [
   { value: '1', label: '1天' },
@@ -845,6 +855,7 @@ function kindLabel(kind: string | null): string {
     'empty_response': '空响应',
     'upstream_4xx': '上游 4xx',
     'upstream_5xx': '上游 5xx',
+    'empty_response_shield': '回空屏蔽',
   }
   return (kind && labels[kind]) || kind || '未知'
 }
@@ -852,6 +863,7 @@ function kindLabel(kind: string | null): string {
 function kindBadgeVariant(kind: string | null): 'default' | 'success' | 'destructive' | 'warning' | 'secondary' {
   if (kind === 'empty_response') return 'warning'
   if (kind === 'upstream_4xx' || kind === 'upstream_5xx') return 'destructive'
+  if (kind === 'empty_response_shield') return 'default'
   return 'secondary'
 }
 

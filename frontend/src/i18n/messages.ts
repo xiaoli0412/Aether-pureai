@@ -2318,6 +2318,8 @@ const legacyExactEnglishMessages: Record<string, string> = {
   '上游 5xx': 'Upstream 5xx',
   '获取诊断记录失败': 'Failed to load diagnostics',
   '获取诊断详情失败': 'Failed to load diagnostic details',
+  '会话ID': 'Session ID',
+  '回空屏蔽': 'Empty-response shield',
 }
 
 const legacyPhraseEnglishMessages: Array<[string, string]> = [
