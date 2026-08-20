@@ -186,6 +186,9 @@ SELECT
       OR ("usage".request_metadata->>'client_requested_stream') IN ('true', 'false')
       OR ("usage".request_metadata->>'upstream_is_stream') IN ('true', 'false')
       OR ("usage".request_metadata->>'websocket_mode') IN ('true', 'false')
+      OR "usage".request_metadata->'error_diagnostic' IS NOT NULL
+      OR NULLIF(BTRIM("usage".request_metadata->>'session_id'), '') IS NOT NULL
+      OR NULLIF(BTRIM("usage".request_metadata->>'request_fingerprint'), '') IS NOT NULL
       THEN jsonb_strip_nulls(jsonb_build_object(
         'client_ip',
         NULLIF(BTRIM("usage".request_metadata->>'client_ip'), ''),
@@ -220,7 +223,13 @@ SELECT
           WHEN ("usage".request_metadata->>'websocket_mode') IN ('true', 'false')
             THEN ("usage".request_metadata->>'websocket_mode')::boolean
           ELSE NULL
-        END
+        END,
+        'error_diagnostic',
+        "usage".request_metadata->'error_diagnostic',
+        'session_id',
+        NULLIF(BTRIM("usage".request_metadata->>'session_id'), ''),
+        'request_fingerprint',
+        NULLIF(BTRIM("usage".request_metadata->>'request_fingerprint'), '')
       ))::json
     ELSE NULL::json
   END AS request_metadata,
