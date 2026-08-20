@@ -1,5 +1,6 @@
 //! Admin surface for the detachable empty-response shield (F4): list the
-//! currently blocked session/fingerprint keys and unblock them manually.
+//! currently blocked session/fingerprint keys, block keys manually, and
+//! unblock them.
 
 use crate::execution_runtime::empty_response_shield::{
     parse_empty_response_shield_config, EMPTY_RESPONSE_SHIELD_CONFIG_KEY,
@@ -15,6 +16,15 @@ use axum::{
 use serde_json::json;
 
 const SHIELD_LIST_PATH: &str = "/api/admin/empty-response-shield";
+const SHIELD_BLOCK_PATH: &str = "/api/admin/empty-response-shield/blocks";
+
+fn shield_blocked_entry_kind(key: &str) -> &'static str {
+    if key.starts_with("session:") {
+        "session"
+    } else {
+        "fingerprint"
+    }
+}
 
 pub(super) async fn maybe_build_local_admin_shield_response(
     state: &AdminAppState<'_>,
@@ -44,16 +54,13 @@ pub(super) async fn maybe_build_local_admin_shield_response(
                     .empty_response_shield
                     .blocked_snapshot(config)
                     .into_iter()
-                    .map(|(key, remaining_secs)| {
-                        let kind = if key.starts_with("session:") {
-                            "session"
-                        } else {
-                            "fingerprint"
-                        };
+                    .map(|entry| {
                         json!({
-                            "key": key,
-                            "kind": kind,
-                            "remaining_secs": remaining_secs,
+                            "key": entry.key,
+                            "kind": shield_blocked_entry_kind(&entry.key),
+                            "remaining_secs": entry.remaining_secs,
+                            "strikes": entry.strikes,
+                            "manual": entry.manual,
                         })
                     })
                     .collect::<Vec<_>>(),
@@ -67,9 +74,103 @@ pub(super) async fn maybe_build_local_admin_shield_response(
                         "threshold": config.threshold,
                         "window_secs": config.window_secs,
                         "block_secs": config.block_secs,
+                        "scope_by_client": config.scope_by_client,
                     })),
                     "blocked": blocked,
                     "total": blocked.len(),
+                }))
+                .into_response(),
+            ));
+        }
+        Some("block")
+            if request_context.request_method == http::Method::POST
+                && matches!(
+                    request_context.request_path.as_str(),
+                    SHIELD_BLOCK_PATH | "/api/admin/empty-response-shield/blocks/"
+                ) =>
+        {
+            let app = state.app();
+            let config_value = app
+                .read_system_config_json_value(EMPTY_RESPONSE_SHIELD_CONFIG_KEY)
+                .await?;
+            let Some(config) = parse_empty_response_shield_config(config_value.as_ref()) else {
+                return Ok(Some(
+                    (
+                        http::StatusCode::SERVICE_UNAVAILABLE,
+                        Json(json!({ "detail": "回空屏蔽未启用：请先在系统配置中开启 empty_response_shield" })),
+                    )
+                        .into_response(),
+                ));
+            };
+
+            let query = request_context.request_query_string.as_deref();
+            let block_secs = crate::handlers::admin::shared::query_param_value(query, "block_secs")
+                .and_then(|value| value.parse::<u64>().ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(config.block_secs);
+
+            // Accept either a full shield key (`key=`) or raw identity parts
+            // (`session=` / `fingerprint=` with optional `api_key_id=`) so the
+            // diagnostics page can ban a source without re-deriving the
+            // client-scoped key format itself.
+            let key = if let Some(key) = crate::handlers::admin::shared::query_param_value(
+                query, "key",
+            )
+            .map(|key| key.trim().to_string())
+            .filter(|key| !key.is_empty())
+            {
+                key
+            } else {
+                let scope = config
+                    .scope_by_client
+                    .then(|| {
+                        crate::handlers::admin::shared::query_param_value(query, "api_key_id")
+                            .map(|value| value.trim().to_string())
+                            .filter(|value| !value.is_empty())
+                    })
+                    .flatten();
+                if let Some(session) =
+                    crate::handlers::admin::shared::query_param_value(query, "session")
+                        .map(|value| value.trim().to_string())
+                        .filter(|value| !value.is_empty())
+                {
+                    match scope.as_deref() {
+                        Some(scope) => format!("session:{scope}:{session}"),
+                        None => format!("session:{session}"),
+                    }
+                } else if let Some(fingerprint) =
+                    crate::handlers::admin::shared::query_param_value(query, "fingerprint")
+                        .map(|value| value.trim().to_string())
+                        .filter(|value| !value.is_empty())
+                {
+                    match scope.as_deref() {
+                        Some(scope) => format!("fp:{scope}:{fingerprint}"),
+                        None => format!("fp:{fingerprint}"),
+                    }
+                } else {
+                    return Ok(Some(
+                        (
+                            http::StatusCode::BAD_REQUEST,
+                            Json(json!({ "detail": "缺少 key / session / fingerprint 参数" })),
+                        )
+                            .into_response(),
+                    ));
+                }
+            };
+
+            app.empty_response_shield.manual_block(&key, block_secs);
+            tracing::info!(
+                target: "aether_gateway::empty_response_shield",
+                shield_key = %key,
+                block_secs = block_secs,
+                "empty-response shield key manually blocked from admin surface"
+            );
+
+            return Ok(Some(
+                Json(json!({
+                    "key": key,
+                    "blocked": true,
+                    "block_secs": block_secs,
                 }))
                 .into_response(),
             ));

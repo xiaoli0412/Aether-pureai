@@ -83,9 +83,37 @@ fn normalize_value_for_fingerprint(value: &Value) -> Value {
     }
 }
 
+/// Client request headers probed (in order) for a session identifier when the
+/// request body carries none. Shared by the pre-dispatch shield gate and the
+/// report-context injection so both always derive the same session identity.
+pub(crate) const SESSION_IDENTITY_HEADER_NAMES: &[&str] = &[
+    "session-id",
+    "x-session-id",
+    "session_id",
+    "thread-id",
+    "x-thread-id",
+    "conversation-id",
+    "x-conversation-id",
+];
+
+/// Extracts a client-supplied session identifier from request headers,
+/// returning the first non-empty value among
+/// [`SESSION_IDENTITY_HEADER_NAMES`].
+pub(crate) fn session_token_from_headers(headers: &http::HeaderMap) -> Option<String> {
+    for name in SESSION_IDENTITY_HEADER_NAMES {
+        if let Some(value) = headers.get(*name).and_then(|value| value.to_str().ok()) {
+            let value = value.trim();
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
-    use super::request_fingerprint_from_headers_body;
+    use super::{request_fingerprint_from_headers_body, session_token_from_headers};
     use serde_json::json;
 
     fn test_headers() -> http::HeaderMap {
@@ -120,5 +148,19 @@ mod tests {
             base,
             request_fingerprint_from_headers_body(&headers, &other_body)
         );
+    }
+
+    #[test]
+    fn session_token_prefers_first_recognized_header() {
+        let mut headers = http::HeaderMap::new();
+        assert_eq!(session_token_from_headers(&headers), None);
+        headers.insert("thread-id", "thread-9".parse().unwrap());
+        assert_eq!(session_token_from_headers(&headers), Some("thread-9".into()));
+        // Earlier names in the probe order win.
+        headers.insert("x-session-id", "sess-1".parse().unwrap());
+        assert_eq!(session_token_from_headers(&headers), Some("sess-1".into()));
+        // Blank values are skipped.
+        headers.insert("session-id", "   ".parse().unwrap());
+        assert_eq!(session_token_from_headers(&headers), Some("sess-1".into()));
     }
 }

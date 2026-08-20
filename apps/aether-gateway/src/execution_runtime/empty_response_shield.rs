@@ -33,7 +33,7 @@ use crate::ai_serving::api::{
     OPENAI_CHAT_SYNC_PLAN_KIND, OPENAI_IMAGE_SYNC_PLAN_KIND,
 };
 use crate::ai_serving::extract_pool_sticky_session_token;
-use crate::orchestration::request_fingerprint_from_headers_body;
+use crate::orchestration::{request_fingerprint_from_headers_body, session_token_from_headers};
 
 /// System configuration key that installs the shield.
 pub(crate) const EMPTY_RESPONSE_SHIELD_CONFIG_KEY: &str = "empty_response_shield";
@@ -55,6 +55,10 @@ pub(crate) struct EmptyResponseShieldConfig {
     pub(crate) threshold: u64,
     pub(crate) window_secs: u64,
     pub(crate) block_secs: u64,
+    /// When true (default) shield keys are scoped by the client API key so
+    /// one abusive client cannot cause another client's identical request to
+    /// be blocked.
+    pub(crate) scope_by_client: bool,
 }
 
 impl Default for EmptyResponseShieldConfig {
@@ -63,6 +67,7 @@ impl Default for EmptyResponseShieldConfig {
             threshold: DEFAULT_EMPTY_SHIELD_THRESHOLD,
             window_secs: DEFAULT_EMPTY_SHIELD_WINDOW_SECS,
             block_secs: DEFAULT_EMPTY_SHIELD_BLOCK_SECS,
+            scope_by_client: true,
         }
     }
 }
@@ -92,6 +97,10 @@ pub(crate) fn parse_empty_response_shield_config(
         threshold: read_u64("threshold", DEFAULT_EMPTY_SHIELD_THRESHOLD),
         window_secs: read_u64("window_secs", DEFAULT_EMPTY_SHIELD_WINDOW_SECS),
         block_secs: read_u64("block_secs", DEFAULT_EMPTY_SHIELD_BLOCK_SECS),
+        scope_by_client: object
+            .get("scope_by_client")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
     })
 }
 
@@ -99,6 +108,18 @@ pub(crate) fn parse_empty_response_shield_config(
 struct EmptyShieldEntry {
     strikes: VecDeque<Instant>,
     touched_at: Instant,
+    /// Gateway request id that recorded the last strike, so retries within a
+    /// single request count at most one strike.
+    last_request_id: Option<String>,
+}
+
+/// One blocked key as surfaced to the admin block list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ShieldBlockedEntry {
+    pub(crate) key: String,
+    pub(crate) remaining_secs: u64,
+    pub(crate) strikes: usize,
+    pub(crate) manual: bool,
 }
 
 /// In-memory shield state: per-key empty-response strikes. The block window
@@ -110,7 +131,10 @@ struct EmptyShieldEntry {
 #[derive(Debug, Default)]
 pub(crate) struct EmptyResponseShieldTracker {
     entries: Mutex<HashMap<String, EmptyShieldEntry>>,
+    /// Manual blocks created from the admin surface (key -> block expiry).
+    manual_blocks: Mutex<HashMap<String, Instant>>,
     armed: std::sync::atomic::AtomicBool,
+    scope_by_client: std::sync::atomic::AtomicBool,
     last_prune_at: Mutex<Option<Instant>>,
 }
 
@@ -123,18 +147,27 @@ impl EmptyResponseShieldTracker {
     }
 
     /// Arms strike recording. Called by the pre-dispatch gate whenever a
-    /// valid shield configuration is present.
-    pub(crate) fn arm(&self) {
+    /// valid shield configuration is present; remembers the configured key
+    /// scoping so strike sites (which run without the config) derive keys
+    /// the same way the gate does.
+    pub(crate) fn arm(&self, config: &EmptyResponseShieldConfig) {
         self.armed.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.scope_by_client
+            .store(config.scope_by_client, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub(crate) fn is_armed(&self) -> bool {
         self.armed.load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    pub(crate) fn scope_by_client(&self) -> bool {
+        self.scope_by_client.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// Records one empty-response strike for the key. No-op while the shield
-    /// is unarmed (module uninstalled).
-    pub(crate) fn record_strike(&self, key: &str) {
+    /// is unarmed (module uninstalled). Retries of the same gateway request
+    /// (`request_id`) count at most one strike.
+    pub(crate) fn record_strike(&self, key: &str, request_id: &str) {
         if !self.is_armed() {
             return;
         }
@@ -147,12 +180,28 @@ impl EmptyResponseShieldTracker {
             .or_insert_with(|| EmptyShieldEntry {
                 strikes: VecDeque::new(),
                 touched_at: Instant::now(),
+                last_request_id: None,
             });
+        if entry
+            .last_request_id
+            .as_deref()
+            .is_some_and(|last| !request_id.is_empty() && last == request_id)
+        {
+            entry.touched_at = Instant::now();
+            return;
+        }
         entry.strikes.push_back(Instant::now());
         if entry.strikes.len() > EMPTY_SHIELD_MAX_STRIKES_PER_KEY {
             entry.strikes.pop_front();
         }
+        entry.last_request_id = Some(request_id.to_string());
         entry.touched_at = Instant::now();
+    }
+
+    /// Manually blocks a key for `block_secs` (admin ban action).
+    pub(crate) fn manual_block(&self, key: &str, block_secs: u64) {
+        let until = Instant::now() + Duration::from_secs(block_secs.max(1));
+        self.manual_blocks.lock().insert(key.to_string(), until);
     }
 
     /// Throttled prune sweep honoring the configured window/block horizon.
@@ -170,18 +219,25 @@ impl EmptyResponseShieldTracker {
         }
         let horizon = config.window_secs + config.block_secs + 300;
         prune_locked_entries(&mut self.entries.lock(), horizon);
+        self.manual_blocks.lock().retain(|_, until| *until > now);
     }
 
     /// Returns how long (seconds) the key remains blocked, or `None` when it
-    /// is not currently blocked under `config`.
+    /// is not currently blocked under `config`. Manual blocks take priority
+    /// over strike-derived blocks.
     pub(crate) fn blocked_remaining_secs(
         &self,
         key: &str,
         config: &EmptyResponseShieldConfig,
     ) -> Option<u64> {
+        let now = Instant::now();
+        if let Some(until) = self.manual_blocks.lock().get(key).copied() {
+            if until > now {
+                return Some(until.duration_since(now).as_secs().max(1));
+            }
+        }
         let mut entries = self.entries.lock();
         let entry = entries.get_mut(key)?;
-        let now = Instant::now();
         let window = Duration::from_secs(config.window_secs);
         entry
             .strikes
@@ -199,25 +255,55 @@ impl EmptyResponseShieldTracker {
         Some(block_until.duration_since(now).as_secs().max(1))
     }
 
-    /// Clears all strikes for a key (manual unblock). Returns whether an entry
-    /// existed.
+    /// Clears all strikes and manual blocks for a key (manual unblock).
+    /// Returns whether anything existed for the key.
     pub(crate) fn unblock(&self, key: &str) -> bool {
-        self.entries.lock().remove(key).is_some()
+        let removed_manual = self.manual_blocks.lock().remove(key).is_some();
+        let removed_entry = self.entries.lock().remove(key).is_some();
+        removed_manual || removed_entry
     }
 
-    /// Snapshot of currently blocked keys with their remaining block seconds.
-    pub(crate) fn blocked_snapshot(
-        &self,
-        config: &EmptyResponseShieldConfig,
-    ) -> Vec<(String, u64)> {
-        let keys: Vec<String> = self.entries.lock().keys().cloned().collect();
+    /// Snapshot of currently blocked keys (strike-derived and manual) with
+    /// their remaining block seconds, sorted by remaining time.
+    pub(crate) fn blocked_snapshot(&self, config: &EmptyResponseShieldConfig) -> Vec<ShieldBlockedEntry> {
+        let strike_keys: Vec<String> = self.entries.lock().keys().cloned().collect();
+        let manual_keys: Vec<String> = self.manual_blocks.lock().keys().cloned().collect();
         let mut blocked = Vec::new();
-        for key in keys {
+        for key in strike_keys {
+            let strikes = self
+                .entries
+                .lock()
+                .get(&key)
+                .map(|entry| entry.strikes.len())
+                .unwrap_or(0);
             if let Some(remaining) = self.blocked_remaining_secs(&key, config) {
-                blocked.push((key, remaining));
+                let manual = manual_keys.contains(&key);
+                blocked.push(ShieldBlockedEntry {
+                    key,
+                    remaining_secs: remaining,
+                    strikes,
+                    manual,
+                });
             }
         }
-        blocked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        for key in manual_keys {
+            if blocked.iter().any(|entry| entry.key == key) {
+                continue;
+            }
+            if let Some(remaining) = self.blocked_remaining_secs(&key, config) {
+                blocked.push(ShieldBlockedEntry {
+                    key,
+                    remaining_secs: remaining,
+                    strikes: 0,
+                    manual: true,
+                });
+            }
+        }
+        blocked.sort_by(|a, b| {
+            b.remaining_secs
+                .cmp(&a.remaining_secs)
+                .then_with(|| a.key.cmp(&b.key))
+        });
         blocked
     }
 
@@ -244,39 +330,85 @@ fn prune_locked_entries(entries: &mut HashMap<String, EmptyShieldEntry>, max_age
     entries.retain(|_, entry| now.duration_since(entry.touched_at) < max_age);
 }
 
-/// Derives the shield key for a request from the session id when present,
-/// falling back to the request fingerprint.
+/// Formats a session shield key, optionally scoped by the client API key so
+/// different clients never share block state.
+fn format_session_key(scope: Option<&str>, token: &str) -> String {
+    match scope {
+        Some(scope) => format!("session:{scope}:{token}"),
+        None => format!("session:{token}"),
+    }
+}
+
+/// Formats a fingerprint shield key, optionally scoped by the client API key.
+fn format_fingerprint_key(scope: Option<&str>, fingerprint: &str) -> String {
+    match scope {
+        Some(scope) => format!("fp:{scope}:{fingerprint}"),
+        None => format!("fp:{fingerprint}"),
+    }
+}
+
+fn client_scope_segment(scope_by_client: bool, client_api_key_id: Option<&str>) -> Option<String> {
+    scope_by_client
+        .then(|| {
+            client_api_key_id
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .flatten()
+}
+
+/// Derives the shield key for a request from the session id when present
+/// (request body first, then recognized session headers), falling back to
+/// the request fingerprint. Kept in sync with the report-context injection.
 pub(crate) fn shield_key_for_request(
     parts: &http::request::Parts,
     body_json: &Value,
+    scope_by_client: bool,
+    client_api_key_id: Option<&str>,
 ) -> Option<String> {
+    let scope = client_scope_segment(scope_by_client, client_api_key_id);
     if let Some(token) = extract_pool_sticky_session_token(body_json) {
-        return Some(format!("session:{token}"));
+        return Some(format_session_key(scope.as_deref(), &token));
     }
-    Some(format!(
-        "fp:{}",
-        request_fingerprint_from_headers_body(&parts.headers, body_json)
+    if let Some(token) = session_token_from_headers(&parts.headers) {
+        return Some(format_session_key(scope.as_deref(), &token));
+    }
+    Some(format_fingerprint_key(
+        scope.as_deref(),
+        &request_fingerprint_from_headers_body(&parts.headers, body_json),
     ))
 }
 
 /// Reads the shield key back out of a report context (which carries the
-/// injected `session_id` / `request_fingerprint` fields).
-pub(crate) fn shield_key_from_report_context(report_context: Option<&Value>) -> Option<String> {
+/// injected `session_id` / `request_fingerprint` fields plus the client
+/// `api_key_id` used for scoping).
+pub(crate) fn shield_key_from_report_context(
+    report_context: Option<&Value>,
+    scope_by_client: bool,
+) -> Option<String> {
     let context = report_context?;
+    let scope = client_scope_segment(
+        scope_by_client,
+        context
+            .get("api_key_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty()),
+    );
     if let Some(session) = context
         .get("session_id")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        return Some(format!("session:{session}"));
+        return Some(format_session_key(scope.as_deref(), session));
     }
     context
         .get("request_fingerprint")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(|fingerprint| format!("fp:{fingerprint}"))
+        .map(|fingerprint| format_fingerprint_key(scope.as_deref(), fingerprint))
 }
 
 /// Builds a local "Google safety review" style response for a blocked chat
@@ -287,7 +419,6 @@ pub(crate) fn build_shield_local_response(
     plan_kind: &str,
     body_json: &Value,
     is_stream: bool,
-    remaining_secs: u64,
 ) -> Option<(u16, std::collections::BTreeMap<String, String>, Vec<u8>)> {
     let model = body_json
         .get("model")
@@ -297,32 +428,32 @@ pub(crate) fn build_shield_local_response(
 
     match plan_kind {
         OPENAI_CHAT_SYNC_PLAN_KIND => {
-            let body = build_openai_chat_safety_body(&model, remaining_secs);
+            let body = build_openai_chat_safety_body(&model);
             Some(json_response(&body))
         }
         OPENAI_CHAT_STREAM_PLAN_KIND if !is_stream => {
-            let body = build_openai_chat_safety_body(&model, remaining_secs);
+            let body = build_openai_chat_safety_body(&model);
             Some(json_response(&body))
         }
         OPENAI_CHAT_STREAM_PLAN_KIND => {
-            let body = build_openai_chat_safety_sse(&model, remaining_secs);
+            let body = build_openai_chat_safety_sse(&model);
             Some(sse_response(body))
         }
         GEMINI_CHAT_SYNC_PLAN_KIND | GEMINI_CLI_SYNC_PLAN_KIND => {
-            let body = build_gemini_safety_body(&model, remaining_secs);
+            let body = build_gemini_safety_body();
             Some(json_response(&body))
         }
         GEMINI_CHAT_STREAM_PLAN_KIND | GEMINI_CLI_STREAM_PLAN_KIND => {
-            let frame = build_gemini_safety_body(&model, remaining_secs);
+            let frame = build_gemini_safety_body();
             let body = format!("data: {}\n\n", frame);
             Some(sse_response(body))
         }
         CLAUDE_CHAT_SYNC_PLAN_KIND | CLAUDE_CLI_SYNC_PLAN_KIND => {
-            let body = build_claude_safety_body(&model, remaining_secs);
+            let body = build_claude_safety_body(&model);
             Some(json_response(&body))
         }
         CLAUDE_CHAT_STREAM_PLAN_KIND | CLAUDE_CLI_STREAM_PLAN_KIND => {
-            let body = build_claude_safety_sse(&model, remaining_secs);
+            let body = build_claude_safety_sse(&model);
             Some(sse_response(body))
         }
         _ => None,
@@ -366,10 +497,19 @@ pub(crate) async fn maybe_build_shielded_local_response(
 
     // The shield is installed: arm strike recording and run a throttled
     // prune sweep honoring the configured horizon.
-    state.empty_response_shield.arm();
+    state.empty_response_shield.arm(&config);
     state.empty_response_shield.maybe_prune(&config);
 
-    let Some(key) = shield_key_for_request(parts, body_json) else {
+    let client_api_key_id = decision
+        .auth_context
+        .as_ref()
+        .map(|context| context.api_key_id.as_str());
+    let Some(key) = shield_key_for_request(
+        parts,
+        body_json,
+        config.scope_by_client,
+        client_api_key_id,
+    ) else {
         return Ok(None);
     };
     let Some(remaining_secs) = state
@@ -380,7 +520,7 @@ pub(crate) async fn maybe_build_shielded_local_response(
     };
 
     let Some((status_code, headers, bytes)) =
-        build_shield_local_response(plan_kind, body_json, is_stream, remaining_secs)
+        build_shield_local_response(plan_kind, body_json, is_stream)
     else {
         // No synthetic response shape for this family: let it through.
         return Ok(None);
@@ -422,15 +562,21 @@ pub(crate) async fn maybe_build_shielded_local_response(
 
 /// Records a shield strike from an observed empty response. Called from the
 /// sync/stream empty-detection sites; the shield key is read from the report
-/// context (session id preferred, request fingerprint fallback).
+/// context (session id preferred, request fingerprint fallback). Retries of
+/// the same gateway request count at most one strike.
 pub(crate) fn record_shield_strike_from_report_context(
     state: &crate::AppState,
     report_context: Option<&Value>,
+    request_id: &str,
 ) {
-    let Some(key) = shield_key_from_report_context(report_context) else {
+    if !state.empty_response_shield.is_armed() {
+        return;
+    }
+    let scope_by_client = state.empty_response_shield.scope_by_client();
+    let Some(key) = shield_key_from_report_context(report_context, scope_by_client) else {
         return;
     };
-    state.empty_response_shield.record_strike(&key);
+    state.empty_response_shield.record_strike(&key, request_id);
 }
 
 /// Client API format recorded for a blocked request, derived from the plan
@@ -500,12 +646,17 @@ async fn record_shield_blocked_usage(
 
     let mut request_metadata = Map::new();
     request_metadata.insert("trace_id".to_string(), Value::String(trace_id.to_string()));
-    if let Some(session) = shield_key.strip_prefix("session:") {
-        request_metadata.insert("session_id".to_string(), Value::String(session.to_string()));
-    } else if let Some(fingerprint) = shield_key.strip_prefix("fp:") {
+    let session_identity = extract_pool_sticky_session_token(body_json)
+        .or_else(|| session_token_from_headers(&parts.headers));
+    if let Some(session) = session_identity {
+        request_metadata.insert("session_id".to_string(), Value::String(session));
+    } else {
         request_metadata.insert(
             "request_fingerprint".to_string(),
-            Value::String(fingerprint.to_string()),
+            Value::String(request_fingerprint_from_headers_body(
+                &parts.headers,
+                body_json,
+            )),
         );
     }
     request_metadata.insert(
@@ -573,7 +724,7 @@ async fn record_shield_blocked_usage(
 /// OpenAI chat-completion shaped safety response. Uses `finish_reason =
 /// content_filter` with an empty assistant message, the standard signal that
 /// a provider safety system withheld the output.
-fn build_openai_chat_safety_body(model: &str, remaining_secs: u64) -> Value {
+fn build_openai_chat_safety_body(model: &str) -> Value {
     let created = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs())
@@ -596,15 +747,10 @@ fn build_openai_chat_safety_body(model: &str, remaining_secs: u64) -> Value {
             "completion_tokens": 0,
             "total_tokens": 0,
         },
-        "aether_shield": {
-            "blocked": true,
-            "reason": "empty_response_shield",
-            "retry_after_secs": remaining_secs,
-        },
     })
 }
 
-fn build_openai_chat_safety_sse(model: &str, remaining_secs: u64) -> String {
+fn build_openai_chat_safety_sse(model: &str) -> String {
     let created = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs())
@@ -631,49 +777,48 @@ fn build_openai_chat_safety_sse(model: &str, remaining_secs: u64) -> String {
             "delta": {},
             "finish_reason": "content_filter",
         }],
-        "aether_shield": {
-            "blocked": true,
-            "reason": "empty_response_shield",
-            "retry_after_secs": remaining_secs,
-        },
     });
     format!("data: {first}\n\ndata: {last}\n\ndata: [DONE]\n\n")
 }
 
-/// Gemini native shaped safety response. Mirrors a Gemini risk-control block:
-/// an empty candidate with `finishReason = SAFETY` plus a `promptFeedback`
-/// safety marker.
-fn build_gemini_safety_body(model: &str, remaining_secs: u64) -> Value {
+/// Gemini native shaped safety response. Faithfully mirrors a real Gemini
+/// prompt-level safety block: HTTP 200 with a `promptFeedback` carrying
+/// `blockReason = SAFETY` and NO candidates (the shape verified against the
+/// official API — real responses never combine a prompt blockReason with
+/// candidates). Clients treat this as terminal and do not retry.
+fn build_gemini_safety_body() -> Value {
     json!({
-        "candidates": [{
-            "content": { "parts": [], "role": "model" },
-            "finishReason": "SAFETY",
-            "index": 0,
-            "safetyRatings": [{
-                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-                "probability": "HIGH",
-                "blocked": true,
-            }],
-        }],
         "promptFeedback": {
             "blockReason": "SAFETY",
-            "safetyRatings": [{
-                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-                "probability": "HIGH",
-            }],
-        },
-        "modelVersion": model,
-        "aetherShield": {
-            "blocked": true,
-            "reason": "empty_response_shield",
-            "retryAfterSecs": remaining_secs,
+            "safetyRatings": [
+                {
+                    "category": "HARM_CATEGORY_HARASSMENT",
+                    "probability": "HIGH",
+                    "blocked": true,
+                },
+                {
+                    "category": "HARM_CATEGORY_HATE_SPEECH",
+                    "probability": "NEGLIGIBLE",
+                    "blocked": false,
+                },
+                {
+                    "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                    "probability": "NEGLIGIBLE",
+                    "blocked": false,
+                },
+                {
+                    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                    "probability": "NEGLIGIBLE",
+                    "blocked": false,
+                },
+            ],
         },
     })
 }
 
 /// Claude messages shaped safety response. Uses an empty content array with
 /// `stop_reason = refusal`.
-fn build_claude_safety_body(model: &str, remaining_secs: u64) -> Value {
+fn build_claude_safety_body(model: &str) -> Value {
     json!({
         "id": format!("msg_shield_{}", uuid::Uuid::now_v7().simple()),
         "type": "message",
@@ -683,11 +828,6 @@ fn build_claude_safety_body(model: &str, remaining_secs: u64) -> Value {
         "stop_reason": "refusal",
         "stop_sequence": null,
         "usage": { "input_tokens": 0, "output_tokens": 0 },
-        "aether_shield": {
-            "blocked": true,
-            "reason": "empty_response_shield",
-            "retry_after_secs": remaining_secs,
-        },
     })
 }
 
@@ -695,8 +835,8 @@ fn build_claude_safety_body(model: &str, remaining_secs: u64) -> Value {
 /// `message_start` (message envelope) -> `message_delta` (stop_reason) ->
 /// `message_stop`. Strict SDKs parse events as a discriminated union, so a
 /// bare `message_stop` carrying a full message object would be rejected.
-fn build_claude_safety_sse(model: &str, remaining_secs: u64) -> String {
-    let message = build_claude_safety_body(model, remaining_secs);
+fn build_claude_safety_sse(model: &str) -> String {
+    let message = build_claude_safety_body(model);
     let mut envelope = message.clone();
     if let Some(object) = envelope.as_object_mut() {
         object.insert("stop_reason".to_string(), Value::Null);
@@ -709,11 +849,6 @@ fn build_claude_safety_sse(model: &str, remaining_secs: u64) -> String {
         "type": "message_delta",
         "delta": { "stop_reason": "refusal", "stop_sequence": null },
         "usage": { "output_tokens": 0 },
-        "aether_shield": {
-            "blocked": true,
-            "reason": "empty_response_shield",
-            "retry_after_secs": remaining_secs,
-        },
     });
     let message_stop = json!({ "type": "message_stop" });
     format!(
@@ -732,6 +867,7 @@ mod tests {
             threshold,
             window_secs,
             block_secs,
+            scope_by_client: true,
         }
     }
 
@@ -742,6 +878,14 @@ mod tests {
         assert_eq!(parsed.threshold, 5);
         assert_eq!(parsed.window_secs, DEFAULT_EMPTY_SHIELD_WINDOW_SECS);
         assert_eq!(parsed.block_secs, DEFAULT_EMPTY_SHIELD_BLOCK_SECS);
+        assert!(parsed.scope_by_client);
+    }
+
+    #[test]
+    fn parses_scope_by_client_override() {
+        let value = json!({ "enabled": true, "scope_by_client": false });
+        let parsed = parse_empty_response_shield_config(Some(&value)).expect("config should parse");
+        assert!(!parsed.scope_by_client);
     }
 
     #[test]
@@ -756,22 +900,51 @@ mod tests {
     #[test]
     fn blocks_after_threshold_strikes_then_expires() {
         let tracker = EmptyResponseShieldTracker::new();
-        tracker.arm();
         let cfg = config(2, 600, 300);
-        tracker.record_strike("session:a");
+        tracker.arm(&cfg);
+        tracker.record_strike("session:a", "req-1");
         assert!(tracker.blocked_remaining_secs("session:a", &cfg).is_none());
-        tracker.record_strike("session:a");
+        tracker.record_strike("session:a", "req-2");
         assert!(tracker.blocked_remaining_secs("session:a", &cfg).is_some());
         // A different key is unaffected.
         assert!(tracker.blocked_remaining_secs("session:b", &cfg).is_none());
     }
 
     #[test]
+    fn retries_of_the_same_request_count_one_strike() {
+        let tracker = EmptyResponseShieldTracker::new();
+        let cfg = config(2, 600, 300);
+        tracker.arm(&cfg);
+        tracker.record_strike("session:a", "req-1");
+        tracker.record_strike("session:a", "req-1");
+        tracker.record_strike("session:a", "req-1");
+        assert_eq!(tracker.strike_count("session:a"), 1);
+        assert!(tracker.blocked_remaining_secs("session:a", &cfg).is_none());
+    }
+
+    #[test]
+    fn manual_block_blocks_and_unblocks() {
+        let tracker = EmptyResponseShieldTracker::new();
+        let cfg = config(3, 600, 300);
+        tracker.arm(&cfg);
+        tracker.manual_block("session:bad", 120);
+        let remaining = tracker
+            .blocked_remaining_secs("session:bad", &cfg)
+            .expect("manual block should block");
+        assert!(remaining <= 120 && remaining >= 1);
+        let snapshot = tracker.blocked_snapshot(&cfg);
+        assert_eq!(snapshot.len(), 1);
+        assert!(snapshot[0].manual);
+        assert!(tracker.unblock("session:bad"));
+        assert!(tracker.blocked_remaining_secs("session:bad", &cfg).is_none());
+    }
+
+    #[test]
     fn unblock_clears_strikes() {
         let tracker = EmptyResponseShieldTracker::new();
-        tracker.arm();
         let cfg = config(1, 600, 300);
-        tracker.record_strike("fp:x");
+        tracker.arm(&cfg);
+        tracker.record_strike("fp:x", "req-1");
         assert!(tracker.blocked_remaining_secs("fp:x", &cfg).is_some());
         assert!(tracker.unblock("fp:x"));
         assert!(tracker.blocked_remaining_secs("fp:x", &cfg).is_none());
@@ -781,24 +954,25 @@ mod tests {
     #[test]
     fn blocked_snapshot_lists_blocked_keys() {
         let tracker = EmptyResponseShieldTracker::new();
-        tracker.arm();
         let cfg = config(1, 600, 300);
-        tracker.record_strike("session:a");
-        tracker.record_strike("session:b");
+        tracker.arm(&cfg);
+        tracker.record_strike("session:a", "req-1");
+        tracker.record_strike("session:b", "req-2");
         let snapshot = tracker.blocked_snapshot(&cfg);
         assert_eq!(snapshot.len(), 2);
+        assert!(snapshot.iter().all(|entry| !entry.manual && entry.strikes == 1));
     }
 
     #[test]
     fn unarmed_tracker_ignores_strikes() {
         let tracker = EmptyResponseShieldTracker::new();
         let cfg = config(1, 600, 300);
-        tracker.record_strike("session:a");
+        tracker.record_strike("session:a", "req-1");
         assert!(tracker.blocked_remaining_secs("session:a", &cfg).is_none());
         assert_eq!(tracker.strike_count("session:a"), 0);
         // Arming enables recording.
-        tracker.arm();
-        tracker.record_strike("session:a");
+        tracker.arm(&cfg);
+        tracker.record_strike("session:a", "req-2");
         assert_eq!(tracker.strike_count("session:a"), 1);
     }
 
@@ -806,15 +980,44 @@ mod tests {
     fn shield_key_prefers_session_over_fingerprint() {
         let body = json!({ "session_id": "sess-1", "messages": [] });
         let parts = test_parts();
-        let key = shield_key_for_request(&parts, &body).expect("key should derive");
+        let key = shield_key_for_request(&parts, &body, false, None).expect("key should derive");
         assert_eq!(key, "session:sess-1");
+    }
+
+    #[test]
+    fn shield_key_scopes_by_client_api_key() {
+        let body = json!({ "session_id": "sess-1", "messages": [] });
+        let parts = test_parts();
+        let scoped =
+            shield_key_for_request(&parts, &body, true, Some("key-1")).expect("key should derive");
+        assert_eq!(scoped, "session:key-1:sess-1");
+        // Without a resolvable client key the key stays unscoped rather than
+        // colliding under an empty scope segment.
+        let unscoped =
+            shield_key_for_request(&parts, &body, true, None).expect("key should derive");
+        assert_eq!(unscoped, "session:sess-1");
+    }
+
+    #[test]
+    fn shield_key_uses_session_header_when_body_has_none() {
+        let body = json!({ "messages": [] });
+        let request = http::Request::builder()
+            .method(http::Method::POST)
+            .uri("/v1/chat/completions")
+            .header("content-type", "application/json")
+            .header("session-id", "hdr-sess-7")
+            .body(())
+            .expect("request should build");
+        let (parts, _) = request.into_parts();
+        let key = shield_key_for_request(&parts, &body, false, None).expect("key should derive");
+        assert_eq!(key, "session:hdr-sess-7");
     }
 
     #[test]
     fn shield_key_falls_back_to_fingerprint() {
         let body = json!({ "messages": [{ "role": "user", "content": "hi" }] });
         let parts = test_parts();
-        let key = shield_key_for_request(&parts, &body).expect("key should derive");
+        let key = shield_key_for_request(&parts, &body, false, None).expect("key should derive");
         assert!(key.starts_with("fp:"));
         assert!(key.len() > 3);
     }
@@ -834,9 +1037,9 @@ mod tests {
     fn report_context_key_matches_request_key() {
         let body = json!({ "session_id": "sess-9", "messages": [] });
         let parts = test_parts();
-        let request_key = shield_key_for_request(&parts, &body).unwrap();
-        let context = json!({ "session_id": "sess-9" });
-        let context_key = shield_key_from_report_context(Some(&context)).unwrap();
+        let request_key = shield_key_for_request(&parts, &body, true, Some("key-9")).unwrap();
+        let context = json!({ "session_id": "sess-9", "api_key_id": "key-9" });
+        let context_key = shield_key_from_report_context(Some(&context), true).unwrap();
         assert_eq!(request_key, context_key);
     }
 
@@ -844,7 +1047,7 @@ mod tests {
     fn builds_openai_chat_safety_response() {
         let body = json!({ "model": "gemini-2.5-pro" });
         let (status, headers, bytes) =
-            build_shield_local_response(OPENAI_CHAT_SYNC_PLAN_KIND, &body, false, 300)
+            build_shield_local_response(OPENAI_CHAT_SYNC_PLAN_KIND, &body, false)
                 .expect("openai chat sync should build");
         assert_eq!(status, 200);
         assert_eq!(
@@ -854,25 +1057,50 @@ mod tests {
         let parsed: Value = serde_json::from_slice(&bytes).expect("valid json");
         assert_eq!(parsed["choices"][0]["finish_reason"], "content_filter");
         assert_eq!(parsed["model"], "gemini-2.5-pro");
+        assert!(parsed.get("aether_shield").is_none());
     }
 
     #[test]
-    fn builds_gemini_safety_response() {
+    fn builds_gemini_safety_response_as_prompt_level_block() {
         let body = json!({ "model": "gemini-2.5-pro" });
         let (status, _headers, bytes) =
-            build_shield_local_response(GEMINI_CHAT_SYNC_PLAN_KIND, &body, false, 300)
+            build_shield_local_response(GEMINI_CHAT_SYNC_PLAN_KIND, &body, false)
                 .expect("gemini chat sync should build");
         assert_eq!(status, 200);
         let parsed: Value = serde_json::from_slice(&bytes).expect("valid json");
-        assert_eq!(parsed["candidates"][0]["finishReason"], "SAFETY");
+        // Real Gemini prompt-level blocks carry promptFeedback with no
+        // candidates; the mimicked response must match that shape exactly.
         assert_eq!(parsed["promptFeedback"]["blockReason"], "SAFETY");
+        assert!(parsed.get("candidates").is_none());
+        assert!(parsed.get("aetherShield").is_none());
+        let ratings = parsed["promptFeedback"]["safetyRatings"]
+            .as_array()
+            .expect("safety ratings present");
+        assert!(ratings.iter().any(|rating| rating["blocked"] == json!(true)));
+    }
+
+    #[test]
+    fn builds_gemini_safety_stream_without_done_sentinel() {
+        let body = json!({ "model": "gemini-2.5-pro" });
+        let (_status, headers, bytes) =
+            build_shield_local_response(GEMINI_CHAT_STREAM_PLAN_KIND, &body, true)
+                .expect("gemini chat stream should build");
+        assert_eq!(
+            headers.get("content-type").map(String::as_str),
+            Some("text/event-stream")
+        );
+        let text = String::from_utf8(bytes).expect("utf8");
+        assert!(text.starts_with("data: "));
+        // Gemini SSE streams end without a [DONE] sentinel.
+        assert!(!text.contains("[DONE]"));
+        assert!(text.contains("\"blockReason\":\"SAFETY\""));
     }
 
     #[test]
     fn builds_openai_chat_safety_stream() {
         let body = json!({ "model": "gemini-2.5-pro" });
         let (status, headers, bytes) =
-            build_shield_local_response(OPENAI_CHAT_STREAM_PLAN_KIND, &body, true, 300)
+            build_shield_local_response(OPENAI_CHAT_STREAM_PLAN_KIND, &body, true)
                 .expect("openai chat stream should build");
         assert_eq!(status, 200);
         assert_eq!(
@@ -888,7 +1116,7 @@ mod tests {
     fn builds_claude_safety_stream_with_valid_event_sequence() {
         let body = json!({ "model": "claude-sonnet-4-5" });
         let (status, headers, bytes) =
-            build_shield_local_response(CLAUDE_CHAT_STREAM_PLAN_KIND, &body, true, 300)
+            build_shield_local_response(CLAUDE_CHAT_STREAM_PLAN_KIND, &body, true)
                 .expect("claude chat stream should build");
         assert_eq!(status, 200);
         assert_eq!(
@@ -926,9 +1154,7 @@ mod tests {
     #[test]
     fn unsupported_plan_kind_returns_none() {
         let body = json!({ "model": "m" });
-        assert!(
-            build_shield_local_response(OPENAI_IMAGE_SYNC_PLAN_KIND, &body, false, 300,).is_none()
-        );
+        assert!(build_shield_local_response(OPENAI_IMAGE_SYNC_PLAN_KIND, &body, false).is_none());
     }
 
     fn test_parts() -> http::request::Parts {

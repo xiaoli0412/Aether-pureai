@@ -6695,17 +6695,35 @@ async fn execute_stream_from_frame_stream_with_retry_scope(
             }
         }
     }
-    if reached_eof
-        && empty_response_policy_active
+    let stream_looks_empty = reached_eof
         && (200..300).contains(&status_code)
         && crate::execution_runtime::empty_response::prefetched_stream_body_lacks_visible_output(
             &provider_prefetched_body,
-        )
+        );
+    let provider_format_is_gemini =
+        crate::ai_serving::normalize_api_format_alias(plan.provider_api_format.as_str())
+            == "gemini:generate_content";
+    if stream_looks_empty
+        && !empty_response_policy_active
+        && provider_format_is_gemini
+        && state.empty_response_shield.is_armed()
     {
+        // Gemini streams without an explicit provider empty-response policy
+        // keep the legacy commit-on-headers behavior, but the F4 shield still
+        // counts the empty response so sessions repeatedly hit by upstream
+        // risk-control blocks get blocked at the pre-dispatch gate.
+        crate::execution_runtime::empty_response_shield::record_shield_strike_from_report_context(
+            state,
+            report_context.as_ref(),
+            request_id,
+        );
+    }
+    if stream_looks_empty && empty_response_policy_active {
         // F4 shield: count this empty response against the session/fingerprint.
         crate::execution_runtime::empty_response_shield::record_shield_strike_from_report_context(
             state,
             report_context.as_ref(),
+            request_id,
         );
         let observed = state
             .empty_response_budget
@@ -6716,9 +6734,6 @@ async fn execute_stream_from_frame_stream_with_retry_scope(
         let empty_policy = upstream_policy
             .as_ref()
             .and_then(|policy| policy.empty_response_policy);
-        let provider_format_is_gemini =
-            crate::ai_serving::normalize_api_format_alias(plan.provider_api_format.as_str())
-                == "gemini:generate_content";
         match crate::execution_runtime::empty_response::empty_success_action(
             provider_format_is_gemini,
             empty_policy.as_ref(),

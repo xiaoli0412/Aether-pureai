@@ -514,6 +514,19 @@ pub(super) fn classify_admin_observability_family_route(
             "admin:usage",
             false,
         ))
+    } else if method == http::Method::POST
+        && matches!(
+            normalized_path_no_trailing,
+            "/api/admin/diagnostics/summarizer/test"
+        )
+    {
+        Some(classified(
+            "admin_proxy",
+            "diagnostics_manage",
+            "summarizer_test",
+            "admin:usage",
+            false,
+        ))
     } else if method == http::Method::GET
         && matches!(
             normalized_path,
@@ -524,6 +537,19 @@ pub(super) fn classify_admin_observability_family_route(
             "admin_proxy",
             "empty_response_shield_manage",
             "list",
+            "admin:usage",
+            false,
+        ))
+    } else if method == http::Method::POST
+        && matches!(
+            normalized_path_no_trailing,
+            "/api/admin/empty-response-shield/blocks"
+        )
+    {
+        Some(classified(
+            "admin_proxy",
+            "empty_response_shield_manage",
+            "block",
             "admin:usage",
             false,
         ))

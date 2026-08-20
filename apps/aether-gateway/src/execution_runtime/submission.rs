@@ -154,6 +154,7 @@ fn build_local_core_sync_finalize_fallback_response(
 }
 
 fn maybe_build_invalid_provider_success_finalize_response(
+    state: &AppState,
     trace_id: &str,
     decision: &GatewayControlDecision,
     payload: &GatewaySyncReportRequest,
@@ -161,6 +162,14 @@ fn maybe_build_invalid_provider_success_finalize_response(
     if !local_core_sync_finalize_has_invalid_provider_success(payload)? {
         return Ok(None);
     }
+
+    // F4 shield: count this empty Gemini finalize against the
+    // session/fingerprint carried by the report context.
+    crate::execution_runtime::empty_response_shield::record_shield_strike_from_report_context(
+        state,
+        payload.report_context.as_ref(),
+        trace_id,
+    );
 
     let client_api_format = resolve_local_sync_client_api_format(payload);
     let message = "Provider returned HTTP 200 but the Gemini response did not contain visible model output; refusing to finalize it as a successful response.";
@@ -616,7 +625,7 @@ pub(crate) async fn submit_local_core_error_or_sync_finalize(
     {
         response
     } else if let Some(response) =
-        maybe_build_invalid_provider_success_finalize_response(trace_id, decision, &payload)?
+        maybe_build_invalid_provider_success_finalize_response(state, trace_id, decision, &payload)?
     {
         response
     } else if let Some(response) =

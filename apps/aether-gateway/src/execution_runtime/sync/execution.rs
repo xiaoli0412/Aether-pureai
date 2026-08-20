@@ -938,6 +938,19 @@ fn local_empty_provider_success_message(
         .as_ref()
         .is_some_and(|policy| policy.upstream_passthrough_mode)
     {
+        // Passthrough providers keep their verbatim responses, but the F4
+        // shield still counts empty successes so sessions that repeatedly
+        // run into upstream risk-control blocks get blocked at the gate.
+        if (200..300).contains(&status_code)
+            && state.empty_response_shield.is_armed()
+            && sync_success_body_lacks_visible_output(body_json, body_bytes)
+        {
+            crate::execution_runtime::empty_response_shield::record_shield_strike_from_report_context(
+                state,
+                report_context,
+                plan.request_id.as_str(),
+            );
+        }
         return None;
     }
     let is_gemini = provider_api_format_is_gemini_generate_content(plan, report_context);
@@ -971,6 +984,7 @@ fn local_empty_provider_success_message(
     crate::execution_runtime::empty_response_shield::record_shield_strike_from_report_context(
         state,
         report_context,
+        plan.request_id.as_str(),
     );
 
     let observed = state
