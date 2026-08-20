@@ -23,8 +23,9 @@ use crate::handlers::shared::provider_pool::{
     admin_provider_pool_cache_affinity_enabled, admin_provider_pool_config_from_config_value,
 };
 use crate::orchestration::{
-    cost_tier_policy_from_provider_config, CostTierBillingPreference, CostTierPolicy,
-    CostTierStickiness,
+    cost_tier_policy_from_provider_config, cost_tier_routing_policy_from_system_config,
+    parse_cost_billing_class_value, CostTierBillingPreference, CostTierPolicy,
+    CostTierStickiness, COST_BILLING_CLASS_CONFIG_KEY, COST_TIER_ROUTING_CONFIG_KEY,
 };
 use aether_billing::{BillingModelPricingSnapshot, BillingService, BillingUsageInput};
 use aether_scheduler_core::RANKING_REASON_CACHED_AFFINITY;
@@ -127,6 +128,31 @@ fn classify_billing_model(
         return Some(CostTierBillingPreference::PerUse);
     }
     None
+}
+
+/// Explicit billing classification declared by the operator on the
+/// standalone cost-routing page: a per-key override in the key's
+/// `capabilities.cost_billing_class` wins over the provider-level
+/// `config.cost_billing_class`.
+fn explicit_billing_class_for_candidate(
+    candidate: &EligibleLocalExecutionCandidate,
+) -> Option<CostTierBillingPreference> {
+    let key_class = candidate
+        .candidate
+        .key_capabilities
+        .as_ref()
+        .and_then(|capabilities| capabilities.get(COST_BILLING_CLASS_CONFIG_KEY))
+        .and_then(|value| parse_cost_billing_class_value(Some(value)));
+    if key_class.is_some() {
+        return key_class;
+    }
+    candidate
+        .transport
+        .provider
+        .config
+        .as_ref()
+        .and_then(|config| config.get(COST_BILLING_CLASS_CONFIG_KEY))
+        .and_then(|value| parse_cost_billing_class_value(Some(value)))
 }
 
 /// Detects the stickiness claim of a candidate. Session affinity is recorded
@@ -234,9 +260,11 @@ fn rerank_candidates(
         .collect()
 }
 
-/// Loads the billing facts for one candidate, degrading to `Neutral` whenever
-/// the billing context or settlement math is unavailable (never fails the
-/// request).
+/// Loads the billing facts for one candidate. Explicit operator
+/// classification (key override > provider `cost_billing_class`) wins; when
+/// absent the class is inferred from pricing data. Missing billing context
+/// degrades profit to `None` (and inferred classes to `Neutral`) but never
+/// fails the request.
 async fn load_candidate_billing_facts(
     state: PlannerAppState<'_>,
     candidate: &EligibleLocalExecutionCandidate,
@@ -244,10 +272,7 @@ async fn load_candidate_billing_facts(
     estimated_tokens: u64,
     target: CostTierBillingPreference,
 ) -> CostTierCandidateFacts {
-    let neutral = CostTierCandidateFacts {
-        class: CostTierCandidateClass::Neutral,
-        profit_usd: None,
-    };
+    let explicit_class = explicit_billing_class_for_candidate(candidate);
     let data = &state.app().data;
     let context = match data
         .find_billing_model_context_by_model_id(
@@ -258,51 +283,53 @@ async fn load_candidate_billing_facts(
         .await
     {
         Ok(Some(context)) => Some(context),
-        Ok(None) => match data
+        Ok(None) => data
             .find_billing_model_context(
                 &candidate.candidate.provider_id,
                 Some(&candidate.candidate.key_id),
                 &candidate.candidate.global_model_name,
             )
             .await
-        {
-            Ok(context) => context,
-            Err(_) => return neutral,
-        },
-        Err(_) => return neutral,
-    };
-    let Some(context) = context else {
-        return neutral;
+            .ok()
+            .flatten(),
+        Err(_) => None,
     };
 
-    let snapshot = BillingModelPricingSnapshot::from(context);
-    if snapshot.is_free_tier() {
-        return neutral;
-    }
-    let resolution = snapshot.resolve_pricing(None, None);
-    let class = match classify_billing_model(&resolution) {
+    let snapshot = context.map(BillingModelPricingSnapshot::from);
+    let inferred_class = match snapshot.as_ref() {
+        Some(snapshot) if snapshot.is_free_tier() => None,
+        Some(snapshot) => classify_billing_model(&snapshot.resolve_pricing(None, None)),
+        None => None,
+    };
+    let effective_class = explicit_class.or(inferred_class);
+    let class = match effective_class {
         Some(model) if model == target => CostTierCandidateClass::Match,
         Some(_) => CostTierCandidateClass::NonMatch,
         None => CostTierCandidateClass::Neutral,
     };
 
-    let mut usage_input = BillingUsageInput::new("chat");
-    usage_input.input_tokens = i64::try_from(estimated_tokens).unwrap_or(i64::MAX);
-    usage_input.api_format = Some(client_api_format.to_string());
-    let profit_usd = BillingService::new()
-        .calculate(&snapshot, &usage_input)
-        .ok()
-        .map(|computation| -computation.actual_total_cost)
-        .filter(|value| value.is_finite());
+    let profit_usd = snapshot.as_ref().and_then(|snapshot| {
+        let mut usage_input = BillingUsageInput::new("chat");
+        usage_input.input_tokens = i64::try_from(estimated_tokens).unwrap_or(i64::MAX);
+        usage_input.api_format = Some(client_api_format.to_string());
+        BillingService::new()
+            .calculate(snapshot, &usage_input)
+            .ok()
+            .map(|computation| -computation.actual_total_cost)
+            .filter(|value| value.is_finite())
+    });
 
     CostTierCandidateFacts { class, profit_usd }
 }
 
 /// Applies the detachable cost-tier re-ranking pass over resolved candidates.
 /// Returns the input order unchanged whenever any guard fails: no context
-/// estimate, fewer than two candidates, no active directive policy, the
-/// applicable tier has no preference, or no candidate matches the target
-/// tier.
+/// estimate, fewer than two candidates, no active policy, the applicable tier
+/// has no preference, or no candidate matches the target tier.
+///
+/// Policy source order: the global `cost_tier_routing` system config
+/// (standalone cost-routing page) first; when it is inactive the legacy
+/// per-provider `config.cost_tier` directive keeps working.
 pub(crate) async fn apply_cost_tier_reranking(
     state: PlannerAppState<'_>,
     candidates: Vec<EligibleLocalExecutionCandidate>,
@@ -318,7 +345,19 @@ pub(crate) async fn apply_cost_tier_reranking(
     if candidates.len() < 2 {
         return candidates;
     }
-    let Some(policy) = select_directive_policy(&candidates) else {
+    let global_policy = match state
+        .app()
+        .read_system_config_json_value(COST_TIER_ROUTING_CONFIG_KEY)
+        .await
+    {
+        Ok(value) => cost_tier_routing_policy_from_system_config(value.as_ref()),
+        Err(_) => CostTierPolicy::default(),
+    };
+    let Some(policy) = global_policy
+        .is_active()
+        .then_some(global_policy)
+        .or_else(|| select_directive_policy(&candidates))
+    else {
         return candidates;
     };
     let Some(target) = target_preference(&policy, estimated_tokens) else {

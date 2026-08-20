@@ -544,6 +544,96 @@ pub(crate) fn cost_tier_policy_from_provider_config(config: Option<&Value>) -> C
     parse_cost_tier_fields(config.and_then(Value::as_object))
 }
 
+/// System configuration key holding the global cost-tier routing policy
+/// (managed by the standalone cost-routing admin page).
+pub(crate) const COST_TIER_ROUTING_CONFIG_KEY: &str = "cost_tier_routing";
+
+/// Provider/key config field carrying the explicit billing classification
+/// (`per_use` / `per_request`).
+pub(crate) const COST_BILLING_CLASS_CONFIG_KEY: &str = "cost_billing_class";
+
+/// Parses the global cost-tier routing policy from the `cost_tier_routing`
+/// system config value. Accepts the flat admin-page shape
+/// (`enabled`, `context_threshold_tokens`, `below_prefer`, `above_prefer`,
+/// `stickiness`) as well as the provider-style nested shape
+/// (`tiers.below.prefer` / `tiers.above.prefer`) for compatibility.
+pub(crate) fn cost_tier_routing_policy_from_system_config(
+    value: Option<&Value>,
+) -> CostTierPolicy {
+    let Some(object) = value.and_then(Value::as_object) else {
+        return CostTierPolicy::default();
+    };
+    if object.contains_key(COST_TIER_CONFIG_KEY) {
+        return parse_cost_tier_fields(Some(object));
+    }
+
+    let tiers = object.get("tiers").and_then(Value::as_object);
+    let stickiness = object.get("stickiness").and_then(Value::as_object);
+    let tier_preference = |tier: &str, flat_key: &str| -> Option<CostTierBillingPreference> {
+        tiers
+            .and_then(|tiers| tiers.get(tier))
+            .and_then(Value::as_object)
+            .and_then(|tier| tier.get("prefer"))
+            .and_then(Value::as_str)
+            .and_then(parse_cost_tier_billing_preference)
+            .or_else(|| {
+                object
+                    .get(flat_key)
+                    .and_then(Value::as_str)
+                    .and_then(parse_cost_tier_billing_preference)
+            })
+    };
+
+    CostTierPolicy {
+        enabled: object
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        context_threshold_tokens: object
+            .get("context_threshold_tokens")
+            .and_then(parse_u64_value)
+            .filter(|value| *value > 0),
+        below_preference: tier_preference("below", "below_prefer"),
+        above_preference: tier_preference("above", "above_prefer"),
+        stickiness: CostTierStickiness {
+            respect_session_affinity: stickiness
+                .and_then(|value| value.get("respect_session_affinity"))
+                .and_then(Value::as_bool)
+                .unwrap_or(true),
+            respect_cache_affinity: stickiness
+                .and_then(|value| value.get("respect_cache_affinity"))
+                .and_then(Value::as_bool)
+                .unwrap_or(true),
+            max_profit_sacrifice_usd: stickiness
+                .and_then(|value| value.get("max_profit_sacrifice_usd"))
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0),
+        },
+    }
+}
+
+/// Parses an explicit billing classification value (`per_use` /
+/// `per_request`) from a provider config or key capabilities field.
+pub(crate) fn parse_cost_billing_class_value(value: Option<&Value>) -> Option<CostTierBillingPreference> {
+    value
+        .and_then(Value::as_str)
+        .and_then(parse_cost_tier_billing_preference)
+}
+
+/// Validates a raw billing-class payload value: accepts null (clears the
+/// classification) or a recognized `per_use`/`per_request` string.
+pub(crate) fn validate_cost_billing_class_value(value: Option<&Value>) -> Result<(), String> {
+    match value {
+        None | Some(Value::Null) => Ok(()),
+        Some(Value::String(text)) => parse_cost_tier_billing_preference(text.trim())
+            .map(|_| ())
+            .ok_or_else(|| {
+                "cost_billing_class must be either 'per_use' or 'per_request'".to_string()
+            }),
+        Some(_) => Err("cost_billing_class must be a string".to_string()),
+    }
+}
+
 fn upstream_policy_to_value(policy: &LocalFailoverPolicy) -> Value {
     let mut object = serde_json::Map::new();
     if policy.upstream_passthrough_mode {

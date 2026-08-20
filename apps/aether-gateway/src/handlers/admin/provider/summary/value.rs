@@ -235,6 +235,12 @@ pub(crate) fn build_admin_provider_summary_value(
             .and_then(|config| config.get("cost_tier"))
             .cloned()
             .unwrap_or(serde_json::Value::Null),
+        "cost_billing_class": provider
+            .config
+            .as_ref()
+            .and_then(|config| config.get("cost_billing_class"))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
         "ops_quota_alert_enabled": ops_quota_alert_enabled,
         "created_at": endpoint_timestamp_or_now(provider.created_at_unix_ms, now_unix_secs),
         "updated_at": endpoint_timestamp_or_now(provider.updated_at_unix_secs, now_unix_secs),

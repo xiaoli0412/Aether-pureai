@@ -57,11 +57,14 @@ pub(crate) use self::oauth_error::{
 };
 pub(crate) use self::policy::{
     append_local_failover_policy_to_value, codex_cyber_flag_passthrough_enabled,
-    cost_tier_policy_from_provider_config, cyber_continue_failover_enabled,
-    local_failover_policy_from_report_context, local_failover_policy_from_transport,
-    resolve_local_failover_policy, responses_websocket_adapter, CostTierBillingPreference,
-    CostTierPolicy, CostTierStickiness, LocalEmptyResponseExhaustion, LocalEmptyResponsePolicy,
-    LocalFailoverPolicy, LocalFailoverRegexRule, ResponsesWebSocketAdapter, COST_TIER_CONFIG_KEY,
+    cost_tier_policy_from_provider_config, cost_tier_routing_policy_from_system_config,
+    cyber_continue_failover_enabled, local_failover_policy_from_report_context,
+    local_failover_policy_from_transport, parse_cost_billing_class_value,
+    resolve_local_failover_policy, responses_websocket_adapter,
+    validate_cost_billing_class_value, CostTierBillingPreference, CostTierPolicy,
+    CostTierStickiness, LocalEmptyResponseExhaustion, LocalEmptyResponsePolicy,
+    LocalFailoverPolicy, LocalFailoverRegexRule, ResponsesWebSocketAdapter,
+    COST_BILLING_CLASS_CONFIG_KEY, COST_TIER_CONFIG_KEY, COST_TIER_ROUTING_CONFIG_KEY,
     CYBER_CONTINUE_FAILOVER_CONFIG_KEY, RESPONSES_WEBSOCKET_CONFIG_KEY, UPSTREAM_POLICY_CONFIG_KEY,
 };
 pub(crate) use self::recovery::{
@@ -75,7 +78,10 @@ pub(crate) use self::report_effects::{
     apply_local_report_effect, store_local_gemini_file_mapping,
     sync_codex_websocket_quota_metadata, LocalReportEffect,
 };
-pub(crate) use self::shield_key::request_fingerprint_from_headers_body;
+pub(crate) use self::shield_key::{
+    request_fingerprint_from_headers_body, session_token_from_headers,
+    SESSION_IDENTITY_HEADER_NAMES,
+};
 
 pub(crate) async fn resolve_local_failover_analysis_for_attempt(
     state: &AppState,

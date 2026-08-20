@@ -7,11 +7,14 @@ use crate::handlers::admin::provider::shared::support::{
 use crate::handlers::admin::provider::write::normalize::normalize_chat_pii_redaction_config;
 use crate::handlers::admin::provider::write::normalize::normalize_pool_advanced_config;
 use crate::handlers::admin::provider::write::normalize::normalize_provider_type_input;
+use crate::handlers::admin::provider::write::normalize::remove_cost_billing_class;
 use crate::handlers::admin::provider::write::normalize::remove_cost_tier;
 use crate::handlers::admin::provider::write::normalize::remove_upstream_policy;
+use crate::handlers::admin::provider::write::normalize::set_cost_billing_class;
 use crate::handlers::admin::provider::write::normalize::set_cost_tier;
 use crate::handlers::admin::provider::write::normalize::set_responses_websocket_enabled;
 use crate::handlers::admin::provider::write::normalize::set_upstream_policy;
+use crate::handlers::admin::provider::write::normalize::validate_cost_billing_class_config;
 use crate::handlers::admin::provider::write::normalize::validate_cost_tier_config;
 use crate::handlers::admin::provider::write::normalize::validate_responses_websocket_config;
 use crate::handlers::admin::provider::write::normalize::validate_upstream_policy_config;
@@ -368,6 +371,14 @@ pub(crate) async fn build_admin_update_provider_record(
         }
     }
     validate_cost_tier_config(&config_map)?;
+
+    if fields.contains("cost_billing_class") {
+        match payload.cost_billing_class.clone() {
+            None | Some(serde_json::Value::Null) => remove_cost_billing_class(&mut config_map),
+            Some(value) => set_cost_billing_class(&mut config_map, value)?,
+        }
+    }
+    validate_cost_billing_class_config(&config_map)?;
 
     updated.config = (!config_map.is_empty()).then_some(serde_json::Value::Object(config_map));
     crate::provider_transport::validate_anthropic_compatibility_profile_config(

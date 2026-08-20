@@ -99,6 +99,18 @@ pub(crate) const ADMIN_MODULE_DEFINITIONS: &[AdminModuleDefinition] = &[
         admin_menu_order: 57,
     },
     AdminModuleDefinition {
+        name: "cost_tier_routing",
+        display_name: "成本分层路由",
+        description: "按渠道/Key 标记按量或按次计费，根据请求上下文大小自动路由到最有利可图的渠道，兼顾会话与缓存粘性。",
+        category: "integration",
+        env_key: "COST_TIER_ROUTING_AVAILABLE",
+        default_available: true,
+        admin_route: Some("/admin/modules/cost-routing"),
+        admin_menu_icon: Some("Route"),
+        admin_menu_group: Some("system"),
+        admin_menu_order: 56,
+    },
+    AdminModuleDefinition {
         name: "important_notification",
         display_name: "通知服务",
         description: "统一管理通知项、模板和推送服务选择，供后台任务和用户通知使用",
@@ -255,6 +267,10 @@ pub(crate) fn admin_module_enabled_config_key(module: &AdminModuleDefinition) ->
         // runtime gate share one source of truth.
         crate::execution_runtime::empty_response_shield::EMPTY_RESPONSE_SHIELD_CONFIG_KEY
             .to_string()
+    } else if module.name == "cost_tier_routing" {
+        // Same pattern as the shield: the toggle lives inside the
+        // `cost_tier_routing` config object the planner reads.
+        crate::orchestration::COST_TIER_ROUTING_CONFIG_KEY.to_string()
     } else {
         format!("module.{}.enabled", module.name)
     }
@@ -269,9 +285,9 @@ fn admin_module_available(module: &AdminModuleDefinition) -> bool {
     module_available_from_env(module.env_key, module.default_available)
 }
 
-/// Reads the shield's enabled flag from inside its config object
-/// (`empty_response_shield.enabled`); absent config means not installed.
-fn empty_response_shield_enabled(config_value: Option<&serde_json::Value>) -> bool {
+/// Reads a module's enabled flag from inside its config object
+/// (`<config>.enabled`); absent config means not installed.
+fn config_object_module_enabled(config_value: Option<&serde_json::Value>) -> bool {
     config_value
         .and_then(serde_json::Value::as_object)
         .and_then(|object| object.get("enabled"))
@@ -397,9 +413,9 @@ pub(crate) async fn build_admin_module_status_payload(
         } else {
             enabled_value
         };
-        if module.name == "empty_response_shield" {
-            // The shield stores its enabled flag inside the config object.
-            empty_response_shield_enabled(enabled_value.as_ref())
+        if module.name == "empty_response_shield" || module.name == "cost_tier_routing" {
+            // These modules store their enabled flag inside the config object.
+            config_object_module_enabled(enabled_value.as_ref())
         } else if module.name == "error_diagnostics" {
             // Core observability feature: enabled unless explicitly disabled.
             system_config_bool(enabled_value.as_ref(), true)

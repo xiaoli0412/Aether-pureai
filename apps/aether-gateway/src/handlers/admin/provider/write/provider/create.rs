@@ -7,9 +7,11 @@ use crate::handlers::admin::provider::shared::support::{
 use crate::handlers::admin::provider::write::normalize::normalize_chat_pii_redaction_config;
 use crate::handlers::admin::provider::write::normalize::normalize_pool_advanced_config;
 use crate::handlers::admin::provider::write::normalize::normalize_provider_type_input;
+use crate::handlers::admin::provider::write::normalize::set_cost_billing_class;
 use crate::handlers::admin::provider::write::normalize::set_cost_tier;
 use crate::handlers::admin::provider::write::normalize::set_responses_websocket_enabled;
 use crate::handlers::admin::provider::write::normalize::set_upstream_policy;
+use crate::handlers::admin::provider::write::normalize::validate_cost_billing_class_config;
 use crate::handlers::admin::provider::write::normalize::validate_cost_tier_config;
 use crate::handlers::admin::provider::write::normalize::validate_responses_websocket_config;
 use crate::handlers::admin::provider::write::normalize::validate_upstream_policy_config;
@@ -197,6 +199,10 @@ pub(crate) async fn build_admin_create_provider_record(
         set_cost_tier(&mut config_map, cost_tier)?;
     }
     validate_cost_tier_config(&config_map)?;
+    if let Some(cost_billing_class) = payload.cost_billing_class.clone() {
+        set_cost_billing_class(&mut config_map, cost_billing_class)?;
+    }
+    validate_cost_billing_class_config(&config_map)?;
     let config = (!config_map.is_empty()).then_some(serde_json::Value::Object(config_map));
     crate::provider_transport::validate_anthropic_compatibility_profile_config(config.as_ref())
         .map_err(|_| "无效的 Anthropic compatibility profile".to_string())?;

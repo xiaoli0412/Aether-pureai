@@ -1458,7 +1458,8 @@ pub fn build_admin_module_health(
         | "server_chan_push"
         | "s3_backup"
         | "error_diagnostics"
-        | "empty_response_shield" => "healthy",
+        | "empty_response_shield"
+        | "cost_tier_routing" => "healthy",
         "gemini_files" => {
             if gemini_files_has_capable_key {
                 "healthy"

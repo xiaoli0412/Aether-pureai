@@ -380,6 +380,36 @@ pub(crate) fn remove_cost_tier(config: &mut serde_json::Map<String, serde_json::
     config.remove("cost_tier");
 }
 
+/// Stores the explicit billing classification (`per_use` / `per_request`)
+/// used by the standalone cost-routing page. `null` clears the marker.
+pub(crate) fn set_cost_billing_class(
+    config: &mut serde_json::Map<String, serde_json::Value>,
+    value: serde_json::Value,
+) -> Result<(), String> {
+    crate::orchestration::validate_cost_billing_class_value(Some(&value))?;
+    if value.is_null() {
+        config.remove(crate::orchestration::COST_BILLING_CLASS_CONFIG_KEY);
+    } else {
+        config.insert(
+            crate::orchestration::COST_BILLING_CLASS_CONFIG_KEY.to_string(),
+            value,
+        );
+    }
+    Ok(())
+}
+
+pub(crate) fn remove_cost_billing_class(config: &mut serde_json::Map<String, serde_json::Value>) {
+    config.remove(crate::orchestration::COST_BILLING_CLASS_CONFIG_KEY);
+}
+
+pub(crate) fn validate_cost_billing_class_config(
+    config: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), String> {
+    crate::orchestration::validate_cost_billing_class_value(
+        config.get(crate::orchestration::COST_BILLING_CLASS_CONFIG_KEY),
+    )
+}
+
 pub(crate) fn validate_cost_tier_config(
     config: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), String> {

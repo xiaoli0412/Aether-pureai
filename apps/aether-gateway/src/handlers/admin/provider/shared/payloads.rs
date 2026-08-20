@@ -160,6 +160,8 @@ pub(crate) struct AdminProviderCreateRequest {
     #[serde(default)]
     pub(crate) cost_tier: Option<serde_json::Value>,
     #[serde(default)]
+    pub(crate) cost_billing_class: Option<serde_json::Value>,
+    #[serde(default)]
     pub(crate) is_active: Option<bool>,
     #[serde(default)]
     pub(crate) concurrent_limit: Option<i32>,
@@ -226,6 +228,8 @@ pub(crate) struct AdminProviderUpdateRequest {
     pub(crate) upstream_policy: Option<serde_json::Value>,
     #[serde(default)]
     pub(crate) cost_tier: Option<serde_json::Value>,
+    #[serde(default)]
+    pub(crate) cost_billing_class: Option<serde_json::Value>,
     #[serde(default)]
     pub(crate) is_active: Option<bool>,
     #[serde(default)]

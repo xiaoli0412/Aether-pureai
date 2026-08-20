@@ -85,10 +85,9 @@ impl<'a> AdminAppState<'a> {
         }
 
         let enabled_config_key = admin_system_modules::admin_module_enabled_config_key(module);
-        if module.name == "empty_response_shield" {
-            // The shield keeps its enabled flag inside the runtime config
-            // object; merge instead of overwriting the threshold/window/block
-            // settings.
+        if module.name == "empty_response_shield" || module.name == "cost_tier_routing" {
+            // These modules keep their enabled flag inside the runtime config
+            // object; merge instead of overwriting the rest of the settings.
             let current = self
                 .read_system_config_json_value(&enabled_config_key)
                 .await?;
