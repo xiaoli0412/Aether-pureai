@@ -49,7 +49,7 @@
                 class="mt-1"
               />
               <p class="mt-1 text-xs text-muted-foreground">
-                窗口内空响应达到该次数即屏蔽
+                窗口内空响应达到该次数即屏蔽（单个请求重试只计 1 次）
               </p>
             </div>
             <div>
@@ -89,6 +89,76 @@
               </p>
             </div>
           </div>
+
+          <div class="flex items-center justify-between gap-4 rounded-lg border border-border/70 px-4 py-3">
+            <div>
+              <Label class="text-sm font-medium">
+                按客户端密钥隔离
+              </Label>
+              <p class="mt-1 text-xs text-muted-foreground">
+                开启后屏蔽键按客户端 API Key 隔离，避免一个用户的回空误伤其他用户的相同请求
+              </p>
+            </div>
+            <Switch v-model="scopeByClient" />
+          </div>
+        </div>
+      </CardSection>
+
+      <CardSection
+        title="手动封禁"
+        description="直接封禁指定的会话或请求指纹（用于精准封禁破限来源；封禁时长使用上方“屏蔽时长”）"
+      >
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-end">
+          <div class="flex-1">
+            <Label
+              for="manual-block-type"
+              class="block text-sm font-medium"
+            >
+              封禁类型
+            </Label>
+            <Select
+              v-model="manualBlockType"
+              class="mt-1"
+            >
+              <SelectTrigger
+                id="manual-block-type"
+                class="h-10"
+              >
+                <SelectValue placeholder="选择类型" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="session">
+                  会话 ID
+                </SelectItem>
+                <SelectItem value="fingerprint">
+                  请求指纹
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div class="flex-[2]">
+            <Label
+              for="manual-block-value"
+              class="block text-sm font-medium"
+            >
+              {{ manualBlockType === 'session' ? '会话 ID' : '请求指纹（64 位十六进制）' }}
+            </Label>
+            <Input
+              id="manual-block-value"
+              v-model="manualBlockValue"
+              :placeholder="manualBlockType === 'session' ? '例如 session-abc123' : '例如 9f86d081...'"
+              class="mt-1 font-mono text-xs"
+            />
+          </div>
+          <Button
+            size="sm"
+            class="h-10"
+            :disabled="manualBlocking || manualBlockValue.trim() === ''"
+            @click="manualBlock"
+          >
+            <Ban class="mr-1 h-3.5 w-3.5" />
+            {{ manualBlocking ? '封禁中...' : '封禁' }}
+          </Button>
         </div>
       </CardSection>
 
@@ -135,6 +205,9 @@
                 标识
               </TableHead>
               <TableHead class="h-10">
+                回空次数
+              </TableHead>
+              <TableHead class="h-10">
                 剩余时间
               </TableHead>
               <TableHead class="h-10 text-right">
@@ -148,15 +221,26 @@
               :key="entry.key"
             >
               <TableCell class="py-3">
-                <Badge :variant="entry.kind === 'session' ? 'default' : 'secondary'">
-                  {{ entry.kind === 'session' ? '会话' : '请求指纹' }}
-                </Badge>
+                <div class="flex items-center gap-1">
+                  <Badge :variant="entry.kind === 'session' ? 'default' : 'secondary'">
+                    {{ entry.kind === 'session' ? '会话' : '请求指纹' }}
+                  </Badge>
+                  <Badge
+                    v-if="entry.manual"
+                    variant="warning"
+                  >
+                    手动
+                  </Badge>
+                </div>
               </TableCell>
               <TableCell
                 class="max-w-[280px] truncate py-3 font-mono text-xs"
                 :title="entry.key"
               >
                 {{ entry.key }}
+              </TableCell>
+              <TableCell class="py-3 text-sm tabular-nums">
+                {{ entry.strikes > 0 ? entry.strikes : '-' }}
               </TableCell>
               <TableCell class="py-3 text-sm tabular-nums">
                 {{ formatRemaining(entry.remaining_secs) }}
@@ -197,6 +281,7 @@ import {
 import { PageHeader, PageContainer, CardSection } from '@/components/layout'
 import { adminApi } from '@/api/admin'
 import { shieldApi, type ShieldBlockedEntry } from '@/api/diagnostics'
+import { Ban } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import { parseApiError } from '@/utils/errorParser'
 import { log } from '@/utils/logger'
@@ -210,10 +295,16 @@ const shieldEnabled = ref(false)
 const threshold = ref(3)
 const windowSecs = ref(600)
 const blockSecs = ref(300)
+const scopeByClient = ref(true)
 
 const loadingBlocked = ref(false)
 const unblocking = ref<string | null>(null)
 const blocked = ref<ShieldBlockedEntry[]>([])
+
+// 手动封禁表单
+const manualBlockType = ref<'session' | 'fingerprint'>('session')
+const manualBlockValue = ref('')
+const manualBlocking = ref(false)
 
 onMounted(async () => {
   await loadConfig()
@@ -228,11 +319,13 @@ async function loadConfig() {
       threshold?: number
       window_secs?: number
       block_secs?: number
+      scope_by_client?: boolean
     }
     shieldEnabled.value = value?.enabled === true
     threshold.value = typeof value?.threshold === 'number' && value.threshold > 0 ? value.threshold : 3
     windowSecs.value = typeof value?.window_secs === 'number' && value.window_secs > 0 ? value.window_secs : 600
     blockSecs.value = typeof value?.block_secs === 'number' && value.block_secs > 0 ? value.block_secs : 300
+    scopeByClient.value = value?.scope_by_client !== false
   } catch (err) {
     const status = (err as { response?: { status?: number } })?.response?.status
     if (status !== 404) {
@@ -263,6 +356,7 @@ async function saveConfig() {
       threshold: positiveInt(threshold.value, 3),
       window_secs: positiveInt(windowSecs.value, 600),
       block_secs: positiveInt(blockSecs.value, 300),
+      scope_by_client: scopeByClient.value,
     }
     await adminApi.updateSystemConfig(CONFIG_KEY, payload, '回空屏蔽配置')
     success('回空屏蔽配置已保存')
@@ -286,6 +380,27 @@ async function unblock(key: string) {
     log.error('解除屏蔽失败:', err)
   } finally {
     unblocking.value = null
+  }
+}
+
+// 手动封禁指定会话/指纹（服务端按“按客户端密钥隔离”设置推导完整屏蔽键）
+async function manualBlock() {
+  const value = manualBlockValue.value.trim()
+  if (!value || manualBlocking.value) return
+  manualBlocking.value = true
+  try {
+    const params = manualBlockType.value === 'session'
+      ? { session: value }
+      : { fingerprint: value }
+    const result = await shieldApi.block(params)
+    success(`已封禁 ${result.key}（${result.block_secs} 秒）`)
+    manualBlockValue.value = ''
+    await loadBlocked()
+  } catch (err) {
+    error(parseApiError(err, '手动封禁失败'))
+    log.error('手动封禁失败:', err)
+  } finally {
+    manualBlocking.value = false
   }
 }
 

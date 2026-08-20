@@ -39,6 +39,17 @@
                 @input="handleSearchChange"
               />
             </div>
+            <!-- 会话 ID 搜索框 -->
+            <div class="relative">
+              <MessagesSquare class="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground z-10 pointer-events-none" />
+              <Input
+                id="diagnostics-session-search"
+                v-model="sessionQuery"
+                placeholder="搜索会话 ID / 指纹..."
+                class="w-36 sm:w-56 h-8 text-sm pl-8"
+                @input="handleSearchChange"
+              />
+            </div>
             <!-- 分隔线 -->
             <div class="hidden sm:block h-4 w-px bg-border" />
             <!-- 诊断类型筛选 -->
@@ -159,6 +170,9 @@
                 模型
               </TableHead>
               <TableHead class="h-12 font-semibold">
+                会话 ID
+              </TableHead>
+              <TableHead class="h-12 font-semibold">
                 用户 / 密钥
               </TableHead>
               <TableHead class="h-12 font-semibold">
@@ -195,6 +209,24 @@
 
               <TableCell class="py-4 text-sm">
                 {{ record.model || '-' }}
+              </TableCell>
+
+              <TableCell class="py-4">
+                <span
+                  v-if="record.session_id"
+                  class="text-xs font-mono truncate block max-w-[9rem]"
+                  :title="record.session_id"
+                >
+                  {{ record.session_id }}
+                </span>
+                <span
+                  v-else-if="record.request_fingerprint"
+                  class="text-xs font-mono text-muted-foreground truncate block max-w-[9rem]"
+                  :title="`请求指纹 ${record.request_fingerprint}`"
+                >
+                  fp:{{ record.request_fingerprint.slice(0, 12) }}…
+                </span>
+                <span v-else>-</span>
               </TableCell>
 
               <TableCell class="py-4">
@@ -244,6 +276,17 @@
                   <Sparkles class="h-3.5 w-3.5 mr-1" />
                   AI 摘要
                 </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  class="h-8 px-2 text-xs text-destructive hover:text-destructive"
+                  :disabled="!banTarget(record) || banning"
+                  :title="banTarget(record) ? '将该记录的会话/请求指纹加入回空屏蔽' : '该记录没有可封禁的会话或指纹'"
+                  @click.stop="banRecord(record)"
+                >
+                  <Ban class="h-3.5 w-3.5 mr-1" />
+                  封禁
+                </Button>
               </TableCell>
             </TableRow>
           </TableBody>
@@ -269,21 +312,40 @@
                   {{ formatDateTime(record.created_at) }}
                 </div>
               </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                class="h-8 px-2 text-xs shrink-0"
-                @click.stop="openSummary(record)"
-              >
-                <Sparkles class="h-3.5 w-3.5 mr-1" />
-                摘要
-              </Button>
+              <div class="flex gap-1 shrink-0">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  class="h-8 px-2 text-xs"
+                  @click.stop="openSummary(record)"
+                >
+                  <Sparkles class="h-3.5 w-3.5 mr-1" />
+                  摘要
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  class="h-8 px-2 text-xs text-destructive hover:text-destructive"
+                  :disabled="!banTarget(record) || banning"
+                  @click.stop="banRecord(record)"
+                >
+                  <Ban class="h-3.5 w-3.5 mr-1" />
+                  封禁
+                </Button>
+              </div>
             </div>
             <div class="text-sm">
               {{ record.model || '-' }} · {{ record.provider_name || '未知提供商' }}
             </div>
             <div class="text-xs text-muted-foreground">
               用户 {{ record.user_id || '-' }}
+            </div>
+            <div
+              v-if="record.session_id"
+              class="text-xs font-mono text-muted-foreground truncate"
+              :title="record.session_id"
+            >
+              会话 {{ record.session_id }}
             </div>
             <div
               class="text-xs text-muted-foreground truncate"
@@ -441,6 +503,7 @@ import { RequestDetailDrawer } from '@/features/usage/components'
 import {
   diagnosticsApi,
   diagnosticErrorMessage,
+  shieldApi,
   type DiagnosticRecord
 } from '@/api/diagnostics'
 import {
@@ -450,7 +513,9 @@ import {
   FilterX,
   Sparkles,
   RefreshCw,
-  Loader2
+  Loader2,
+  Ban,
+  MessagesSquare
 } from 'lucide-vue-next'
 import { useRowClick } from '@/composables/useRowClick'
 import { useToast } from '@/composables/useToast'
@@ -476,10 +541,13 @@ const summaryMeta = ref('')
 
 const searchQuery = ref('')
 const apiKeyQuery = ref('')
+const sessionQuery = ref('')
+const banning = ref(false)
 
 const filters = ref({
   userId: '',
   apiKeyId: '',
+  session: '',
   kind: '__all__',
   days: 7
 })
@@ -512,6 +580,7 @@ const debouncedLoad = () => {
 const hasActiveFilters = computed(() => {
   return searchQuery.value !== '' ||
     apiKeyQuery.value !== '' ||
+    sessionQuery.value !== '' ||
     filters.value.kind !== '__all__' ||
     filters.value.days !== 7
 })
@@ -526,6 +595,7 @@ async function loadRecords() {
     const data = await diagnosticsApi.listDiagnostics({
       user_id: filters.value.userId || undefined,
       api_key_id: filters.value.apiKeyId || undefined,
+      session: filters.value.session || undefined,
       kind: filters.value.kind !== '__all__' ? filters.value.kind : undefined,
       from: now - filters.value.days * 86400,
       to: now,
@@ -556,14 +626,17 @@ async function loadRecords() {
 function handleSearchChange() {
   filters.value.userId = searchQuery.value.trim()
   filters.value.apiKeyId = apiKeyQuery.value.trim()
+  filters.value.session = sessionQuery.value.trim()
   debouncedLoad()
 }
 
 function handleResetFilters() {
   searchQuery.value = ''
   apiKeyQuery.value = ''
+  sessionQuery.value = ''
   filters.value.userId = ''
   filters.value.apiKeyId = ''
+  filters.value.session = ''
   filters.value.kind = '__all__'
   filters.value.days = 7
   filtersDaysString.value = '7'
@@ -601,6 +674,40 @@ function handleRowClick(event: MouseEvent, record: DiagnosticRecord) {
 function openDetail(record: DiagnosticRecord) {
   selectedUsageId.value = record.usage_id
   detailOpen.value = true
+}
+
+// 该记录可用于封禁的身份来源：优先会话 ID，其次请求指纹
+function banTarget(record: DiagnosticRecord): 'session' | 'fingerprint' | null {
+  if (record.session_id) return 'session'
+  if (record.request_fingerprint) return 'fingerprint'
+  return null
+}
+
+// 将该记录的会话/指纹加入回空屏蔽（服务端按 scope_by_client 推导完整屏蔽键）
+async function banRecord(record: DiagnosticRecord) {
+  const target = banTarget(record)
+  if (!target || banning.value) return
+  banning.value = true
+  try {
+    const params =
+      target === 'session'
+        ? { session: record.session_id ?? undefined, api_key_id: record.api_key_id ?? undefined }
+        : { fingerprint: record.request_fingerprint ?? undefined, api_key_id: record.api_key_id ?? undefined }
+    const result = await shieldApi.block(params)
+    toast({
+      title: '已加入回空屏蔽',
+      description: `键 ${result.key} 已封禁 ${result.block_secs} 秒`
+    })
+  } catch (error) {
+    log.error('封禁失败:', error)
+    toast({
+      title: '封禁失败',
+      description: diagnosticErrorMessage(error),
+      variant: 'destructive'
+    })
+  } finally {
+    banning.value = false
+  }
 }
 
 function openSummary(record: DiagnosticRecord) {

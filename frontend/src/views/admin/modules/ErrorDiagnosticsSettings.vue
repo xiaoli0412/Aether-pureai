@@ -13,6 +13,23 @@
         <template #actions>
           <Button
             size="sm"
+            variant="outline"
+            :disabled="testing || !configured"
+            :title="configured ? '用已保存的配置发起一次测试调用' : '请先保存配置再测试'"
+            @click="testConnection"
+          >
+            <Loader2
+              v-if="testing"
+              class="mr-1 h-3.5 w-3.5 animate-spin"
+            />
+            <PlugZap
+              v-else
+              class="mr-1 h-3.5 w-3.5"
+            />
+            {{ testing ? '测试中...' : '测试连接' }}
+          </Button>
+          <Button
+            size="sm"
             :disabled="saving"
             @click="saveConfig"
           >
@@ -100,6 +117,53 @@
               />
             </div>
           </div>
+
+          <p class="text-xs text-muted-foreground">
+            提示：Base URL 可以填本网关自身（如 http://服务器IP:8084/v1，配合一个下游 API Key），这样摘要请求会走你已配置的渠道；也可以直填 NewAPI 等 OpenAI 兼容服务。模型名必须是该服务实际可用的模型。
+          </p>
+
+          <!-- 测试连接结果 -->
+          <div
+            v-if="testResult"
+            class="space-y-1 rounded-lg border px-4 py-3 text-sm"
+            :class="testResult.ok ? 'border-emerald-500/40 bg-emerald-500/10' : 'border-destructive/40 bg-destructive/10'"
+          >
+            <div class="flex items-center gap-2 font-medium">
+              <CheckCircle2
+                v-if="testResult.ok"
+                class="h-4 w-4 text-emerald-500"
+              />
+              <XCircle
+                v-else
+                class="h-4 w-4 text-destructive"
+              />
+              {{ testResult.ok ? '连接成功，模型可用' : `测试失败（${stageLabel(testResult.stage)}）` }}
+              <span
+                v-if="testResult.elapsed_ms !== undefined"
+                class="text-xs font-normal text-muted-foreground"
+              >
+                {{ testResult.elapsed_ms }}ms
+              </span>
+            </div>
+            <p
+              v-if="testResult.ok && testResult.reply_excerpt"
+              class="text-xs text-muted-foreground break-all"
+            >
+              模型回复：{{ testResult.reply_excerpt }}
+            </p>
+            <p
+              v-if="!testResult.ok && testResult.detail"
+              class="text-xs text-muted-foreground break-all whitespace-pre-wrap"
+            >
+              {{ testResult.detail }}
+            </p>
+            <p
+              v-if="!testResult.ok && testResult.upstream_excerpt"
+              class="text-xs text-muted-foreground break-all whitespace-pre-wrap"
+            >
+              上游响应摘录：{{ testResult.upstream_excerpt }}
+            </p>
+          </div>
         </div>
       </CardSection>
 
@@ -124,6 +188,11 @@ import { RouterLink } from 'vue-router'
 import { Badge, Button, Input, Label } from '@/components/ui'
 import { PageHeader, PageContainer, CardSection } from '@/components/layout'
 import { adminApi } from '@/api/admin'
+import {
+  diagnosticsSummarizerApi,
+  type SummarizerTestResult
+} from '@/api/diagnostics'
+import { CheckCircle2, Loader2, PlugZap, XCircle } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import { parseApiError } from '@/utils/errorParser'
 import { log } from '@/utils/logger'
@@ -139,6 +208,10 @@ const baseUrlInput = ref('')
 const apiKeyInput = ref('')
 const modelInput = ref('')
 const timeoutInput = ref(30)
+
+// 测试连接
+const testing = ref(false)
+const testResult = ref<SummarizerTestResult | null>(null)
 
 const canSave = computed(() => {
   return baseUrlInput.value.trim() !== '' && modelInput.value.trim() !== '' && (
@@ -208,5 +281,40 @@ async function saveConfig() {
 function isNotFoundError(err: unknown): boolean {
   const status = (err as { response?: { status?: number } })?.response?.status
   return status === 404
+}
+
+function stageLabel(stage?: string): string {
+  switch (stage) {
+    case 'config':
+      return '配置不完整'
+    case 'transport':
+      return '无法连接'
+    case 'http':
+      return '上游拒绝'
+    case 'parse':
+      return '响应异常'
+    default:
+      return stage || '未知'
+  }
+}
+
+// 用已保存的配置发起一次最小测试调用（修改后请先保存再测试）
+async function testConnection() {
+  if (testing.value) return
+  testing.value = true
+  testResult.value = null
+  try {
+    testResult.value = await diagnosticsSummarizerApi.testConnection()
+    if (testResult.value.ok) {
+      success('摘要器连接正常，模型可用')
+    } else {
+      error(`摘要器测试失败：${testResult.value.detail || stageLabel(testResult.value.stage)}`)
+    }
+  } catch (err) {
+    log.error('摘要器测试失败:', err)
+    error(parseApiError(err, '摘要器测试失败'))
+  } finally {
+    testing.value = false
+  }
 }
 </script>

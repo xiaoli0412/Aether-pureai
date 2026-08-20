@@ -624,6 +624,12 @@
             费用
           </TableHead>
           <TableHead
+            v-if="isColumnVisible('session_id')"
+            class="h-12 font-semibold w-[10%]"
+          >
+            会话ID
+          </TableHead>
+          <TableHead
             v-if="isColumnVisible('performance')"
             class="h-12 font-semibold w-[9%] text-right"
           >
@@ -657,12 +663,6 @@
             class="h-12 font-semibold w-[10%]"
           >
             IP 地址
-          </TableHead>
-          <TableHead
-            v-if="isColumnVisible('session_id')"
-            class="h-12 font-semibold w-[10%]"
-          >
-            会话ID
           </TableHead>
           <TableHead
             v-if="isColumnVisible('user_agent')"
@@ -934,6 +934,13 @@
             </div>
           </TableCell>
           <TableCell
+            v-if="isColumnVisible('session_id')"
+            class="py-4 w-[10%] text-xs truncate font-mono"
+            :title="record.session_id || '-'"
+          >
+            {{ record.session_id || '-' }}
+          </TableCell>
+          <TableCell
             v-if="isColumnVisible('performance')"
             class="text-right py-4 w-[9%]"
           >
@@ -988,13 +995,6 @@
             :title="record.client_ip || '-'"
           >
             {{ record.client_ip || '-' }}
-          </TableCell>
-          <TableCell
-            v-if="isColumnVisible('session_id')"
-            class="py-4 w-[10%] text-xs truncate font-mono"
-            :title="record.session_id || '-'"
-          >
-            {{ record.session_id || '-' }}
           </TableCell>
           <TableCell
             v-if="isColumnVisible('user_agent')"
@@ -1184,6 +1184,7 @@ const DEFAULT_ADMIN_COLUMNS: UsageRecordColumnId[] = [
   'status',
   'tokens',
   'cost',
+  'session_id',
   'performance',
 ]
 

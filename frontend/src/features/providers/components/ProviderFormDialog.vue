@@ -490,134 +490,13 @@
           </div>
         </div>
 
-        <div
-          class="space-y-3 p-3 border rounded-lg bg-muted/50"
-          data-testid="cost-tier-setting"
-        >
+        <div class="flex items-center justify-between gap-4 p-3 border rounded-lg bg-muted/50">
           <div class="space-y-0.5">
             <span class="text-sm font-medium">{{ legacyT('成本分层路由') }}</span>
             <p class="text-xs text-muted-foreground leading-relaxed">
-              {{ legacyT('按请求上下文长度自动在不同计费模式的上游间切换：小于阈值走一侧、大于阈值走另一侧，利润优先，兼顾会话/缓存粘性。') }}
+              {{ legacyT('渠道按量/按次计费分类与上下文阈值路由已迁移到独立页面：模块管理 → 成本分层路由。') }}
             </p>
           </div>
-          <div class="flex items-center justify-between">
-            <div class="space-y-0.5">
-              <Label
-                for="cost-tier-enabled"
-                class="text-xs"
-              >
-                {{ legacyT('启用成本分层') }}
-              </Label>
-              <p class="text-xs text-muted-foreground">
-                {{ legacyT('对该提供商的候选按上下文阈值重排（配合其他提供商的计费模式生效）。') }}
-              </p>
-            </div>
-            <Switch
-              id="cost-tier-enabled"
-              :model-value="form.cost_tier_enabled"
-              :aria-label="legacyT('启用成本分层')"
-              @update:model-value="(v: boolean) => form.cost_tier_enabled = v"
-            />
-          </div>
-          <template v-if="form.cost_tier_enabled">
-            <div class="grid grid-cols-3 gap-3">
-              <div class="space-y-1.5">
-                <Label>{{ legacyT('上下文阈值（tokens）') }}</Label>
-                <Input
-                  :model-value="form.cost_tier_threshold ?? ''"
-                  type="number"
-                  min="1"
-                  :placeholder="legacyT('如 128000')"
-                  @update:model-value="(v) => form.cost_tier_threshold = parseNumberInput(v)"
-                />
-              </div>
-              <div class="space-y-1.5">
-                <Label>{{ legacyT('阈值以下偏好') }}</Label>
-                <Select v-model="form.cost_tier_below_prefer">
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="per_use">
-                      {{ legacyT('按量计费') }}
-                    </SelectItem>
-                    <SelectItem value="per_request">
-                      {{ legacyT('按次计费') }}
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div class="space-y-1.5">
-                <Label>{{ legacyT('阈值以上偏好') }}</Label>
-                <Select v-model="form.cost_tier_above_prefer">
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="per_request">
-                      {{ legacyT('按次计费') }}
-                    </SelectItem>
-                    <SelectItem value="per_use">
-                      {{ legacyT('按量计费') }}
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div class="space-y-2 border-t pt-2">
-              <div class="flex items-center justify-between">
-                <div class="space-y-0.5">
-                  <Label
-                    for="cost-tier-respect-session"
-                    class="text-xs"
-                  >
-                    {{ legacyT('尊重会话粘性') }}
-                  </Label>
-                  <p class="text-xs text-muted-foreground">
-                    {{ legacyT('在不超出利润让步预算时优先保持同一会话的上游。') }}
-                  </p>
-                </div>
-                <Switch
-                  id="cost-tier-respect-session"
-                  :model-value="form.cost_tier_respect_session"
-                  :aria-label="legacyT('尊重会话粘性')"
-                  @update:model-value="(v: boolean) => form.cost_tier_respect_session = v"
-                />
-              </div>
-              <div class="flex items-center justify-between">
-                <div class="space-y-0.5">
-                  <Label
-                    for="cost-tier-respect-cache"
-                    class="text-xs"
-                  >
-                    {{ legacyT('尊重缓存粘性') }}
-                  </Label>
-                  <p class="text-xs text-muted-foreground">
-                    {{ legacyT('在不超出利润让步预算时优先命中缓存亲和的上游。') }}
-                  </p>
-                </div>
-                <Switch
-                  id="cost-tier-respect-cache"
-                  :model-value="form.cost_tier_respect_cache"
-                  :aria-label="legacyT('尊重缓存粘性')"
-                  @update:model-value="(v: boolean) => form.cost_tier_respect_cache = v"
-                />
-              </div>
-              <div class="grid grid-cols-2 gap-3">
-                <div class="space-y-1.5">
-                  <Label>{{ legacyT('最大利润让步（USD）') }}</Label>
-                  <Input
-                    :model-value="form.cost_tier_max_sacrifice_usd ?? ''"
-                    type="number"
-                    min="0"
-                    step="0.0001"
-                    :placeholder="legacyT('默认 0（利润绝对优先）')"
-                    @update:model-value="(v) => form.cost_tier_max_sacrifice_usd = parseNumberInput(v)"
-                  />
-                </div>
-              </div>
-            </div>
-          </template>
         </div>
 
         <div class="flex items-center justify-between gap-4 p-3 border rounded-lg bg-muted/50">
@@ -753,14 +632,6 @@ const form = ref({
   upstream_policy_empty_detect: false,
   upstream_policy_empty_max_attempts: undefined as number | undefined,
   upstream_policy_empty_on_exhausted: 'error' as 'passthrough' | 'error',
-  // 成本分层路由（按上下文长度在按量/按次上游间切换）
-  cost_tier_enabled: false,
-  cost_tier_threshold: undefined as number | undefined,
-  cost_tier_below_prefer: 'per_use' as 'per_request' | 'per_use',
-  cost_tier_above_prefer: 'per_request' as 'per_request' | 'per_use',
-  cost_tier_respect_session: true,
-  cost_tier_respect_cache: true,
-  cost_tier_max_sacrifice_usd: undefined as number | undefined,
 })
 
 // 重置表单
@@ -802,14 +673,6 @@ function resetForm() {
     upstream_policy_empty_detect: false,
     upstream_policy_empty_max_attempts: undefined,
     upstream_policy_empty_on_exhausted: 'error',
-    // 成本分层路由
-    cost_tier_enabled: false,
-    cost_tier_threshold: undefined,
-    cost_tier_below_prefer: 'per_use',
-    cost_tier_above_prefer: 'per_request',
-    cost_tier_respect_session: true,
-    cost_tier_respect_cache: true,
-    cost_tier_max_sacrifice_usd: undefined,
   }
 }
 
@@ -855,13 +718,6 @@ function loadProviderData() {
     upstream_policy_empty_detect: props.provider.upstream_policy?.empty_response?.detect ?? false,
     upstream_policy_empty_max_attempts: props.provider.upstream_policy?.empty_response?.max_attempts ?? undefined,
     upstream_policy_empty_on_exhausted: props.provider.upstream_policy?.empty_response?.on_exhausted ?? 'error',
-    cost_tier_enabled: props.provider.cost_tier?.enabled ?? false,
-    cost_tier_threshold: props.provider.cost_tier?.context_threshold_tokens ?? undefined,
-    cost_tier_below_prefer: props.provider.cost_tier?.tiers?.below?.prefer ?? 'per_use',
-    cost_tier_above_prefer: props.provider.cost_tier?.tiers?.above?.prefer ?? 'per_request',
-    cost_tier_respect_session: props.provider.cost_tier?.stickiness?.respect_session_affinity ?? true,
-    cost_tier_respect_cache: props.provider.cost_tier?.stickiness?.respect_cache_affinity ?? true,
-    cost_tier_max_sacrifice_usd: props.provider.cost_tier?.stickiness?.max_profit_sacrifice_usd ?? undefined,
   }
 }
 
@@ -920,35 +776,6 @@ function buildUpstreamPolicyPayload() {
   return policy
 }
 
-// 组装成本分层路由载荷：未启用或未设置阈值时提交 null（清除配置）
-function buildCostTierPayload() {
-  if (!form.value.cost_tier_enabled || form.value.cost_tier_threshold === undefined) {
-    return null
-  }
-  const stickiness: Record<string, unknown> = {}
-  if (!form.value.cost_tier_respect_session) {
-    stickiness.respect_session_affinity = false
-  }
-  if (!form.value.cost_tier_respect_cache) {
-    stickiness.respect_cache_affinity = false
-  }
-  if (form.value.cost_tier_max_sacrifice_usd !== undefined) {
-    stickiness.max_profit_sacrifice_usd = form.value.cost_tier_max_sacrifice_usd
-  }
-  const payload: Record<string, unknown> = {
-    enabled: true,
-    context_threshold_tokens: form.value.cost_tier_threshold,
-    tiers: {
-      below: { prefer: form.value.cost_tier_below_prefer },
-      above: { prefer: form.value.cost_tier_above_prefer },
-    },
-  }
-  if (Object.keys(stickiness).length > 0) {
-    payload.stickiness = stickiness
-  }
-  return payload
-}
-
 // 提交表单
 const handleSubmit = async () => {
   // 月卡类型必须设置周期开始时间
@@ -984,7 +811,6 @@ const handleSubmit = async () => {
       keep_priority_on_conversion: form.value.keep_priority_on_conversion,
       responses_websocket_enabled: form.value.responses_websocket_enabled,
       upstream_policy: buildUpstreamPolicyPayload(),
-      cost_tier: buildCostTierPayload(),
       is_active: form.value.is_active,
       // 请求配置
       max_retries: form.value.max_retries ?? undefined,

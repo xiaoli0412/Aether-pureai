@@ -32,6 +32,7 @@ export interface DiagnosticsListFilters {
   kind?: string
   user_id?: string
   api_key_id?: string
+  session?: string
   from?: number
   to?: number
   limit?: number
@@ -128,13 +129,30 @@ export interface ShieldBlockedEntry {
   key: string
   kind: 'session' | 'fingerprint' | string
   remaining_secs: number
+  strikes: number
+  manual: boolean
 }
 
 export interface ShieldStatus {
   installed: boolean
-  config: { threshold: number; window_secs: number; block_secs: number } | null
+  config: {
+    threshold: number
+    window_secs: number
+    block_secs: number
+    scope_by_client?: boolean
+  } | null
   blocked: ShieldBlockedEntry[]
   total: number
+}
+
+export interface ShieldBlockParams {
+  /** 完整屏蔽键（session:.../fp:...）；与 session/fingerprint 二选一 */
+  key?: string
+  session?: string
+  fingerprint?: string
+  /** 客户端 API Key ID（scope_by_client 开启时用于键隔离） */
+  api_key_id?: string
+  block_secs?: number
 }
 
 export const shieldApi = {
@@ -144,11 +162,41 @@ export const shieldApi = {
     return response.data
   },
 
+  // 手动封禁某个会话/指纹
+  async block(params: ShieldBlockParams): Promise<{ key: string; blocked: boolean; block_secs: number }> {
+    const response = await apiClient.post('/api/admin/empty-response-shield/blocks', null, {
+      params
+    })
+    return response.data
+  },
+
   // 手动解除某个会话/指纹的屏蔽
   async unblock(key: string): Promise<{ key: string; unblocked: boolean }> {
     const response = await apiClient.delete(
       `/api/admin/empty-response-shield/${encodeURIComponent(key)}`
     )
+    return response.data
+  }
+}
+
+// ---- AI 摘要器连通性测试 ----
+
+export interface SummarizerTestResult {
+  ok: boolean
+  stage?: 'config' | 'transport' | 'http' | 'parse' | string
+  endpoint?: string
+  model?: string
+  http_status?: number
+  elapsed_ms?: number
+  detail?: string
+  reply_excerpt?: string
+  upstream_excerpt?: string
+}
+
+export const diagnosticsSummarizerApi = {
+  // 用当前保存的摘要器配置发起一次最小测试调用
+  async testConnection(): Promise<SummarizerTestResult> {
+    const response = await apiClient.post('/api/admin/diagnostics/summarizer/test')
     return response.data
   }
 }

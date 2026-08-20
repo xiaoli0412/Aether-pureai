@@ -125,6 +125,16 @@
               <span>{{ formatApiFormat(detail.api_format) }}</span>
               <span class="hidden opacity-40 sm:inline">|</span>
               <span>用户: {{ detail.user?.username || 'Unknown' }}</span>
+              <template v-if="sessionIdentity">
+                <span class="hidden opacity-40 sm:inline">|</span>
+                <span
+                  class="flex min-w-0 items-center gap-1"
+                  :title="sessionIdentity.value"
+                >
+                  <span class="font-medium text-foreground">{{ sessionIdentity.label }}:</span>
+                  <span class="max-w-[16rem] truncate font-mono">{{ sessionIdentity.value }}</span>
+                </span>
+              </template>
             </div>
           </div>
 
@@ -1453,6 +1463,20 @@ const metadataPanelData = computed<Record<string, unknown> | null>(() => {
   return Object.keys(merged).length > 0
     ? formatMetadataDisplayValue(merged) as Record<string, unknown>
     : null
+})
+
+// 会话身份：优先展示提取到的会话 ID，其次展示请求指纹（均来自 request_metadata）
+const sessionIdentity = computed<{ label: string; value: string } | null>(() => {
+  const metadata = detail.value?.metadata
+  if (!metadata || typeof metadata !== 'object') return null
+  const record = metadata as Record<string, unknown>
+  const sessionId = typeof record.session_id === 'string' ? record.session_id.trim() : ''
+  if (sessionId) return { label: '会话ID', value: sessionId }
+  const fingerprint = typeof record.request_fingerprint === 'string'
+    ? record.request_fingerprint.trim()
+    : ''
+  if (fingerprint) return { label: '请求指纹', value: fingerprint }
+  return null
 })
 
 const detailForCurrentRequest = computed(() => (

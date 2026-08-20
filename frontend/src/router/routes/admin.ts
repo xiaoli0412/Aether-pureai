@@ -143,6 +143,12 @@ export const adminRoutes: RouteRecordRaw[] = [
         meta: { module: 'empty_response_shield' }
       },
       {
+        path: 'modules/cost-routing',
+        name: 'CostTierRoutingSettings',
+        component: view(() => import('@/views/admin/modules/CostTierRoutingSettings.vue')),
+        meta: { module: 'cost_tier_routing' }
+      },
+      {
         path: 'modules/s3-backup',
         name: 'S3BackupSettings',
         component: view(() => import('@/views/admin/modules/S3BackupSettings.vue')),

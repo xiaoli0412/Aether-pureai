@@ -295,7 +295,7 @@ export interface EndpointAPIKey {
   rpm_limit?: number | null  // RPM 速率限制 (1-10000)，null 表示自适应模式
   concurrent_limit?: number | null  // 并发请求上限，null/0 表示不限制
   allowed_models?: AllowedModels  // 允许使用的模型列表（null=不限制）
-  capabilities?: Record<string, boolean> | null  // 能力标签配置（如 cache_1h, context_1m）
+  capabilities?: Record<string, unknown> | null  // 能力标签配置（如 cache_1h, context_1m；cost_billing_class 为字符串）
   // 缓存与熔断配置
   cache_ttl_minutes: number  // 缓存 TTL（分钟），0=禁用
   max_probe_interval_minutes: number  // 熔断探测间隔（分钟）
@@ -592,7 +592,7 @@ export interface EndpointAPIKeyUpdate {
   rpm_limit?: number | null  // RPM 速率限制 (1-10000)，null 表示切换为自适应模式
   concurrent_limit?: number | null  // 并发请求上限，null/0 表示不限制
   allowed_models?: AllowedModels
-  capabilities?: Record<string, boolean> | null
+  capabilities?: Record<string, unknown> | null
   cache_ttl_minutes?: number
   max_probe_interval_minutes?: number
   note?: string
@@ -956,6 +956,7 @@ export interface ProviderWithEndpointsSummary {
   responses_websocket_enabled?: boolean
   upstream_policy?: UpstreamPolicyConfig | null
   cost_tier?: CostTierConfig | null
+  cost_billing_class?: 'per_use' | 'per_request' | string | null
   ops_quota_alert_enabled?: boolean
   created_at: string
   updated_at: string

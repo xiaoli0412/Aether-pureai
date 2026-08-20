@@ -208,7 +208,7 @@ export async function addProviderKey(
     cache_ttl_minutes?: number
     max_probe_interval_minutes?: number
     allowed_models?: AllowedModels
-    capabilities?: Record<string, boolean>
+    capabilities?: Record<string, unknown>
     note?: string
     auto_fetch_models?: boolean  // 是否启用自动获取模型
     model_include_patterns?: string[]  // 模型包含规则
@@ -241,7 +241,7 @@ export async function updateProviderKey(
     max_probe_interval_minutes: number
     allowed_models: AllowedModels
     locked_models: string[]  // 被锁定的模型列表
-    capabilities: Record<string, boolean> | null
+    capabilities: Record<string, unknown> | null
     is_active: boolean
     note: string
     auto_fetch_models: boolean  // 是否启用自动获取模型
