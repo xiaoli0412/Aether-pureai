@@ -89,6 +89,8 @@ pub(super) async fn maybe_build_local_admin_diagnostics_response(
                 user_id: query_param_value(query, "user_id"),
                 api_key_id: query_param_value(query, "api_key_id"),
                 diagnostic_kind: query_param_value(query, "kind"),
+                diagnostic_present: true,
+                session_identity: query_param_value(query, "session"),
                 limit: Some(limit),
                 offset: Some(offset),
                 newest_first,
@@ -187,6 +189,35 @@ pub(super) async fn maybe_build_local_admin_diagnostics_response(
                 "usage_record",
                 &item.id,
             )));
+        }
+        Some("summarizer_test")
+            if request_context.request_method == http::Method::POST
+                && matches!(
+                    request_context.request_path.as_str(),
+                    "/api/admin/diagnostics/summarizer/test"
+                        | "/api/admin/diagnostics/summarizer/test/"
+                ) =>
+        {
+            use super::diagnostics_summarizer::{
+                diagnostics_summarizer_client, test_diagnostics_summarizer,
+            };
+
+            let config_value = state
+                .read_system_config_json_value(ERROR_DIAGNOSTIC_SUMMARIZER_CONFIG_KEY)
+                .await?;
+            let Some(config) = parse_diagnostics_summarizer_config(config_value.as_ref()) else {
+                return Ok(Some(
+                    Json(json!({
+                        "ok": false,
+                        "stage": "config",
+                        "detail": "AI 摘要器未配置完整：需要先填写 base_url / api_key / model",
+                    }))
+                    .into_response(),
+                ));
+            };
+            let client = diagnostics_summarizer_client(&config)?;
+            let result = test_diagnostics_summarizer(&client, &config).await;
+            return Ok(Some(Json(result).into_response()));
         }
         Some("summarize")
             if request_context.request_method == http::Method::POST

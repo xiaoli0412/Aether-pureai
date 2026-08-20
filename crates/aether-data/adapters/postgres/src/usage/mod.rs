@@ -1674,6 +1674,40 @@ fn push_postgres_usage_diagnostic_kind_filter(
         .push_bind(diagnostic_kind.to_string());
 }
 
+fn push_postgres_usage_diagnostic_present_filter(
+    builder: &mut QueryBuilder<'_, Postgres>,
+    has_where: &mut bool,
+    diagnostic_present: bool,
+) {
+    if !diagnostic_present {
+        return;
+    }
+
+    push_postgres_usage_where(builder, has_where);
+    builder.push("\"usage\".request_metadata->'error_diagnostic' IS NOT NULL");
+}
+
+fn push_postgres_usage_session_identity_filter(
+    builder: &mut QueryBuilder<'_, Postgres>,
+    has_where: &mut bool,
+    session_identity: Option<&str>,
+) {
+    let Some(session_identity) = session_identity
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+
+    push_postgres_usage_where(builder, has_where);
+    builder
+        .push("(\"usage\".request_metadata->>'session_id' = ")
+        .push_bind(session_identity.to_string())
+        .push(" OR \"usage\".request_metadata->>'request_fingerprint' = ")
+        .push_bind(session_identity.to_string())
+        .push(")");
+}
+
 fn push_postgres_usage_api_key_id_filter(
     builder: &mut QueryBuilder<'_, Postgres>,
     has_where: &mut bool,
@@ -3061,6 +3095,16 @@ OR (\"usage\".error_message IS NOT NULL AND BTRIM(\"usage\".error_message) <> ''
             &mut has_where,
             query.diagnostic_kind.as_deref(),
         );
+        push_postgres_usage_diagnostic_present_filter(
+            &mut builder,
+            &mut has_where,
+            query.diagnostic_present,
+        );
+        push_postgres_usage_session_identity_filter(
+            &mut builder,
+            &mut has_where,
+            query.session_identity.as_deref(),
+        );
         push_postgres_usage_api_key_id_filter(
             &mut builder,
             &mut has_where,
@@ -3375,6 +3419,16 @@ OR (\"usage\".error_message IS NOT NULL AND BTRIM(\"usage\".error_message) <> ''
             &mut builder,
             &mut has_where,
             query.diagnostic_kind.as_deref(),
+        );
+        push_postgres_usage_diagnostic_present_filter(
+            &mut builder,
+            &mut has_where,
+            query.diagnostic_present,
+        );
+        push_postgres_usage_session_identity_filter(
+            &mut builder,
+            &mut has_where,
+            query.session_identity.as_deref(),
         );
         push_postgres_usage_api_key_id_filter(
             &mut builder,

@@ -602,6 +602,28 @@ OR (`usage`.error_message IS NOT NULL AND TRIM(`usage`.error_message) <> ''))",
             .push("JSON_UNQUOTE(JSON_EXTRACT(`usage`.request_metadata, '$.error_diagnostic.kind')) = ")
             .push_bind(diagnostic_kind.to_string());
     }
+    if query.diagnostic_present {
+        push_where(builder, has_where);
+        builder.push(
+            "JSON_EXTRACT(`usage`.request_metadata, '$.error_diagnostic') IS NOT NULL",
+        );
+    }
+    if let Some(session_identity) = query
+        .session_identity
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        push_where(builder, has_where);
+        builder
+            .push("(JSON_UNQUOTE(JSON_EXTRACT(`usage`.request_metadata, '$.session_id')) = ")
+            .push_bind(session_identity.to_string())
+            .push(
+                " OR JSON_UNQUOTE(JSON_EXTRACT(`usage`.request_metadata, '$.request_fingerprint')) = ",
+            )
+            .push_bind(session_identity.to_string())
+            .push(")");
+    }
     if let Some(api_key_id) = query
         .api_key_id
         .as_deref()
@@ -637,6 +659,8 @@ fn push_keyword_filters(
             is_stream: query.is_stream,
             error_only: query.error_only,
             diagnostic_kind: None,
+            diagnostic_present: false,
+            session_identity: None,
             api_key_id: None,
             limit: None,
             offset: None,

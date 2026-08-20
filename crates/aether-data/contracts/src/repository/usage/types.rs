@@ -959,6 +959,12 @@ pub struct UsageAuditListQuery {
     /// value (e.g. `empty_response`, `upstream_4xx`, `upstream_5xx`). None = no
     /// diagnostic filter; the query plan is unchanged.
     pub diagnostic_kind: Option<String>,
+    /// When true, only audits carrying a `request_metadata.error_diagnostic`
+    /// marker are returned (diagnostic event listing).
+    pub diagnostic_present: bool,
+    /// Matches audits whose `request_metadata.session_id` or
+    /// `request_metadata.request_fingerprint` equals this value exactly.
+    pub session_identity: Option<String>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
     pub newest_first: bool,

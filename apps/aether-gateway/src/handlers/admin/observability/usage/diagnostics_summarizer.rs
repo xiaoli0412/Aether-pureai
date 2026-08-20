@@ -235,6 +235,101 @@ pub(crate) fn diagnostics_summary_now_unix_secs() -> u64 {
         .unwrap_or(0)
 }
 
+/// Connectivity test for the configured summarizer, structured for the admin
+/// UI: sends a minimal prompt and reports exactly where a failure happens
+/// (transport, HTTP status, response parsing) instead of a bare 502.
+pub(crate) async fn test_diagnostics_summarizer(
+    client: &reqwest::Client,
+    config: &DiagnosticsSummarizerConfig,
+) -> Value {
+    let endpoint = diagnostics_summarizer_base_url(config);
+    let started = std::time::Instant::now();
+    let body = json!({
+        "model": config.model,
+        "messages": [
+            { "role": "user", "content": "Connectivity test. Reply with exactly: OK" },
+        ],
+        "temperature": 0.0,
+    });
+    let response = match client
+        .post(&endpoint)
+        .bearer_auth(&config.api_key)
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(err) => {
+            return json!({
+                "ok": false,
+                "stage": "transport",
+                "endpoint": endpoint,
+                "model": config.model,
+                "detail": format!("无法连接到摘要器地址：{err}"),
+            });
+        }
+    };
+    let status = response.status();
+    let text = response.text().await.unwrap_or_default();
+    let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    if !status.is_success() {
+        return json!({
+            "ok": false,
+            "stage": "http",
+            "endpoint": endpoint,
+            "model": config.model,
+            "http_status": status.as_u16(),
+            "elapsed_ms": elapsed_ms,
+            "detail": format!("上游返回 HTTP {}", status.as_u16()),
+            "upstream_excerpt": diagnostics_summary_text_excerpt(&text),
+        });
+    }
+    let parsed: Value = match serde_json::from_str(&text) {
+        Ok(parsed) => parsed,
+        Err(err) => {
+            return json!({
+                "ok": false,
+                "stage": "parse",
+                "endpoint": endpoint,
+                "model": config.model,
+                "elapsed_ms": elapsed_ms,
+                "detail": format!("上游返回的不是合法 JSON：{err}"),
+                "upstream_excerpt": diagnostics_summary_text_excerpt(&text),
+            });
+        }
+    };
+    match parse_diagnostics_summary_response(&parsed) {
+        Some(content) => json!({
+            "ok": true,
+            "endpoint": endpoint,
+            "model": config.model,
+            "elapsed_ms": elapsed_ms,
+            "reply_excerpt": content.chars().take(120).collect::<String>(),
+        }),
+        None => json!({
+            "ok": false,
+            "stage": "parse",
+            "endpoint": endpoint,
+            "model": config.model,
+            "elapsed_ms": elapsed_ms,
+            "detail": "上游返回成功，但响应里没有 choices[0].message.content（模型名可能无效）",
+            "upstream_excerpt": diagnostics_summary_text_excerpt(&text),
+        }),
+    }
+}
+
+fn diagnostics_summary_text_excerpt(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.len() <= 512 {
+        return trimmed.to_string();
+    }
+    let mut end = 512;
+    while !trimmed.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &trimmed[..end])
+}
+
 /// Builds the outbound client for a summarizer call, honoring the configured
 /// timeout. Kept separate so tests can substitute their own client.
 pub(crate) fn diagnostics_summarizer_client(

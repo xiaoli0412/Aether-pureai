@@ -190,24 +190,27 @@ pub(crate) fn build_local_execution_report_context(
 }
 
 /// Injects the session identity fields used by the empty-response shield
-/// (F4) and surfaced in usage records: the extracted session id when the
-/// client body carries one, and otherwise a stable request fingerprint. Both
-/// are derived from the client's original body/headers so they match the
-/// values computed at the pre-dispatch shield gate.
+/// (F4) and surfaced in usage records: the extracted session id (from the
+/// client body first, then recognized session headers) and a stable request
+/// fingerprint, which is always recorded. Both are derived from the client's
+/// original body/headers so they match the values computed at the
+/// pre-dispatch shield gate.
 fn insert_session_identity_fields(
     extra_fields: &mut Map<String, Value>,
     original_request_body_json: Option<&Value>,
     original_headers: &http::HeaderMap,
 ) {
-    let Some(body_json) = original_request_body_json else {
-        return;
-    };
-    if let Some(session_id) = crate::ai_serving::extract_pool_sticky_session_token(body_json) {
+    let session_id = original_request_body_json
+        .and_then(crate::ai_serving::extract_pool_sticky_session_token)
+        .or_else(|| crate::orchestration::session_token_from_headers(original_headers));
+    if let Some(session_id) = session_id {
         extra_fields
             .entry("session_id".to_string())
             .or_insert_with(|| Value::String(session_id));
-        return;
     }
+    let Some(body_json) = original_request_body_json else {
+        return;
+    };
     let fingerprint =
         crate::orchestration::request_fingerprint_from_headers_body(original_headers, body_json);
     extra_fields
@@ -493,11 +496,17 @@ mod tests {
         assert_eq!(fallback["request_fingerprint"], Value::String(mutated));
 
         // Session ids are extracted from the raw body even when the redacted
-        // body no longer carries one.
+        // body no longer carries one. The fingerprint is now always recorded
+        // alongside the session id (no longer either/or).
         let raw_session_body = json!({"session_id": "sess-77", "messages": []});
         let context = build(Some(&raw_headers), Some(&raw_session_body));
         assert_eq!(context["session_id"], "sess-77");
-        assert!(context.get("request_fingerprint").is_none());
+        let session_expected =
+            crate::orchestration::request_fingerprint_from_headers_body(&raw_headers, &raw_session_body);
+        assert_eq!(
+            context["request_fingerprint"],
+            Value::String(session_expected)
+        );
     }
 
     #[test]

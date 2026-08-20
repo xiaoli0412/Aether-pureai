@@ -344,6 +344,32 @@ fn usage_matches_list_query(item: &StoredRequestUsageAudit, query: &UsageAuditLi
             return false;
         }
     }
+    if query.diagnostic_present {
+        let present = item
+            .request_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("error_diagnostic"))
+            .is_some_and(|diagnostic| !diagnostic.is_null());
+        if !present {
+            return false;
+        }
+    }
+    if let Some(session_identity) = query
+        .session_identity
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let metadata = item.request_metadata.as_ref();
+        let matches = ["session_id", "request_fingerprint"]
+            .iter()
+            .filter_map(|field| metadata.and_then(|value| value.get(*field)))
+            .filter_map(Value::as_str)
+            .any(|value| value == session_identity);
+        if !matches {
+            return false;
+        }
+    }
 
     true
 }

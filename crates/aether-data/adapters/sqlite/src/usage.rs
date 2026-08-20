@@ -901,6 +901,23 @@ OR (error_message IS NOT NULL AND TRIM(error_message) <> ''))",
                 .push_bind(diagnostic_kind.to_string());
         }
     }
+    if query.diagnostic_present {
+        push_sqlite_usage_where(builder, has_where);
+        builder.push("json_extract(request_metadata, '$.error_diagnostic') IS NOT NULL");
+    }
+    if let Some(session_identity) = query.session_identity.as_deref().map(str::trim) {
+        if !session_identity.is_empty() {
+            push_sqlite_usage_where(builder, has_where);
+            builder
+                .push("(CAST(json_extract(request_metadata, '$.session_id') AS TEXT) = ")
+                .push_bind(session_identity.to_string())
+                .push(
+                    " OR CAST(json_extract(request_metadata, '$.request_fingerprint') AS TEXT) = ",
+                )
+                .push_bind(session_identity.to_string())
+                .push(")");
+        }
+    }
     if let Some(api_key_id) = query.api_key_id.as_deref().map(str::trim) {
         if !api_key_id.is_empty() {
             push_sqlite_usage_where(builder, has_where);
@@ -949,6 +966,8 @@ fn push_sqlite_usage_keyword_filters(
             is_stream: query.is_stream,
             error_only: query.error_only,
             diagnostic_kind: None,
+            diagnostic_present: false,
+            session_identity: None,
             api_key_id: None,
             limit: None,
             offset: None,
